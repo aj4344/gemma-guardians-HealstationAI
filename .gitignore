@@ -110,6 +110,7 @@ acne.jpeg
 .mcp-debug-tools/
 .playwright-mcp/
 .superdesign/
+.github/instructions/
 
 # Frontend orphan / junk files (not part of the app)
 frontend/README.md
