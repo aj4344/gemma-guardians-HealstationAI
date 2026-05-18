@@ -1,0 +1,128 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.venv/
+venv/
+ENV/
+env/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Audio outputs
+audio_outputs/
+*.mp3
+*.wav
+*.ogg
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Node.js (Frontend)
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.vite/
+
+# Test outputs
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+
+# Backup files
+*.bak
+*.backup
+*_backup.*
+*_old.*
+* - Copy.*
+* - Copy - Copy.*
+
+# YoYo AI version control directory
+.yoyo/
+
+# Legacy cloud API service — not used in offline mode
+locationiq_doctor_service.py
+
+# Legacy debug and utility scripts (excluded from repo)
+debug_groq_simple.py
+debug_vision_detailed.py
+get_groq_models.py
+quick_test.py
+test_sorting_fix.py
+brain_of_the_doctor_fixed.py
+
+# Internal implementation notes (not for public repo)
+CHANGES.md
+*_CHANGES.md
+*_NOTES.md
+*_TODO.md
+
+# Sample/test images
+acne.jpeg
+*.jpeg
+*.jpg
+*.png
+
+# IDE and dev tooling (not project code)
+.cursor/
+.windsurfrules
+.mcp-debug-tools/
+.playwright-mcp/
+.superdesign/
+
+# Frontend orphan / junk files (not part of the app)
+frontend/README.md
+frontend/public/test.html
+frontend/src/TestApp.jsx
+frontend/src/components/ui/BuyMeCoffeeSection.jsx
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Mac
+.DS_Store
+.AppleDouble
+.LSOverride
