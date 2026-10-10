@@ -1243,7 +1243,7 @@ function App() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `doctor-response-${timestamp.replace(/:/g, '-')}.mp3`;
+      a.download = `doctor-response-${timestamp.replace(/:/g, '-')}.wav`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
