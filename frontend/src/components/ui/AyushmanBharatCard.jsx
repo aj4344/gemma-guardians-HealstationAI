@@ -3,7 +3,6 @@ import React, { useState } from 'react';
 import styled from 'styled-components';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FaTimes, FaHospital, FaCheckCircle, FaInfoCircle, FaQrcode, FaIdCard } from 'react-icons/fa';
-import { media } from '../../styles/breakpoints';
 
 // Glass Morphism Modal Backdrop
 const Backdrop = styled(motion.div)`
@@ -387,7 +386,7 @@ const FindHospitalsButton = styled(motion.button)`
   }
 `;
 
-const AyushmanBharatCard = ({ onClose, language = 'en', translations }) => {
+const AyushmanBharatCard = ({ onClose, translations }) => {
   const [formData, setFormData] = useState({
     name: '',
     age: '',

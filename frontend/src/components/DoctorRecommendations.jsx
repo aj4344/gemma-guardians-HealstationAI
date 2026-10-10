@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import styled from 'styled-components';
 import { 
   FaUserMd, FaStar, FaMapMarkerAlt, FaPhone, FaGlobe, 
@@ -9,6 +9,7 @@ import {
 } from 'react-icons/fa';
 import axios from 'axios';
 import { media } from '../styles/breakpoints';
+import { apiUrl, openExternal } from '../config';
 
 // Use existing icons instead of importing new ones
 const FaKidney = FaStethoscope;   // Using stethoscope icon for kidney
@@ -508,7 +509,6 @@ const DoctorRecommendations = ({
   onClose,
   userLocation, 
   recommendedSpecialty, 
-  diagnosis, 
   language = 'en' 
 }) => {
   const [doctors, setDoctors] = useState([]);
@@ -658,131 +658,55 @@ const DoctorRecommendations = ({
     general: <FaUserCheck />
   };
 
-  useEffect(() => {
-    console.log('🔄 Filter changed to:', selectedFilter);
-    console.log('📍 Current userLocation:', userLocation);
-    console.log('🩺 Current recommendedSpecialty:', recommendedSpecialty);
-    
-    // Clear previous results when switching filters
-    setDoctors([]);
-    setError(null);
-    
-    if (selectedFilter === 'city_search') {
-      setShowCitySearch(true);
-      console.log('🏙️ Switching to city search mode');
-    } else {
-      setShowCitySearch(false);
-      console.log('📍 Switching to location-based search mode');
-      
-      if (recommendedSpecialty) {
-        if (userLocation) {
-          console.log('✅ Prerequisites met, starting location-based search');
-          console.log('📊 User coordinates:', userLocation.latitude, userLocation.longitude);
-          searchDoctors();
-        } else {
-          console.log('⚠️ Location not available, suggesting city search');
-          // Automatically switch to city search when location isn't available
-          setSelectedFilter('city_search');
-          setShowCitySearch(true);
-          
-          // Set a default city if we're confident about it (e.g., from IP)
-          setSearchCity('Pune'); // Default city
-          setSearchSpecialty(recommendedSpecialty);
-        }
-      } else {
-        console.log('❌ Missing prerequisites:');
-        console.log('   - userLocation:', !!userLocation);
-        console.log('   - recommendedSpecialty:', !!recommendedSpecialty);
-      }
-    }
-  }, [userLocation, recommendedSpecialty, selectedFilter]);
-
-  const searchDoctors = async () => {
+  const searchDoctors = useCallback(async () => {
+    if (!userLocation) return;
     setLoading(true);
     setError(null);
-    
-    // 🐛 Debug logging with coordinate validation
-    console.log('🔍 Starting doctor search with params:');
-    console.log('📍 User Location:', userLocation);
-    console.log('🩺 Recommended Specialty:', recommendedSpecialty);
-    console.log('🌍 Language:', language);
-    console.log('📏 Selected Filter:', selectedFilter);
-    
-    // Default coordinates for Pune if location is not available
-    let searchLatitude = 18.5204;
-    let searchLongitude = 73.8567;
-    let isDefaultLocation = false;
-    
-    // 🚨 CRITICAL: Validate coordinates to detect location issues
-    if (userLocation) {
-      const { latitude, longitude } = userLocation;
-      console.log(`🌍 Coordinates: ${latitude}, ${longitude}`);
-      searchLatitude = latitude;
-      searchLongitude = longitude;
-      
-      // Pune coordinates: ~18.5204°N, 73.8567°E
-      // Mumbai coordinates: ~19.0760°N, 72.8777°E
-      if (latitude > 18.3 && latitude < 18.8 && longitude > 73.5 && longitude < 74.2) {
-        console.log('✅ CORRECT: Coordinates appear to be in Pune area');
-      } else if (latitude > 18.9 && latitude < 19.3 && longitude > 72.5 && longitude < 73.2) {
-        console.log('❌ ERROR: Coordinates appear to be in Mumbai area - THIS IS WRONG!');
-        console.log('🚨 User is in Pune but location shows Mumbai coordinates!');
-      } else {
-        console.log('⚠️ WARNING: Coordinates are in unknown area');
-        console.log(`   Expected Pune: ~18.52, ~73.86`);
-        console.log(`   Expected Mumbai: ~19.08, ~72.88`);
-        console.log(`   Actual: ${latitude}, ${longitude}`);
-      }
-    } else {
-      console.log('⚠️ No user location available, using default Pune coordinates');
-      isDefaultLocation = true;
-    }
-    
+
     try {
-      const requestData = {
-        latitude: searchLatitude,
-        longitude: searchLongitude,
+      // Only what the search needs: no diagnosis text leaves the consultation.
+      const response = await axios.post(apiUrl('/api/search-doctors'), {
+        latitude: userLocation.latitude,
+        longitude: userLocation.longitude,
         specialty: recommendedSpecialty,
         radius: 25000, // 25km radius
         language: language,
         sort_by: selectedFilter,
-        ai_response: diagnosis,  // 🤖 Include AI diagnosis for semantic analysis
-        is_default_location: isDefaultLocation  // Let the API know if we're using default coordinates
-      };
-      
-      console.log('📤 API Request Data:', requestData);
-      console.log('🎯 Expected: Hospitals near Pune coordinates');
-      
-      const response = await axios.post('http://127.0.0.1:8001/api/search-doctors', requestData);
-      
-      console.log('📥 API Response:', response.data);
-      console.log('👨‍⚕️ Doctors found:', response.data.doctors?.length || 0);
-      
-      // 🚨 Validate response to check if we got Mumbai results for Pune user
-      if (response.data.doctors && response.data.doctors.length > 0) {
-        const firstDoctor = response.data.doctors[0];
-        console.log('🏥 First hospital location:', firstDoctor.location);
-        console.log('📍 First hospital coordinates:', firstDoctor.latitude, firstDoctor.longitude);
-        
-        if (firstDoctor.location && firstDoctor.location.toLowerCase().includes('mumbai')) {
-          console.log('🚨 CRITICAL ERROR: Got Mumbai hospitals for location-based search!');
-          console.log('🚨 This indicates a serious bug in location handling!');
-        }
-      }
-      
+      });
       setDoctors(response.data.doctors || []);
     } catch (err) {
-      console.error('❌ Doctor search failed:', err);
-      console.error('🔍 Error details:', err.response?.data || err.message);
+      console.error('Doctor search failed:', err.response?.data || err.message);
       setError(err.message);
     } finally {
       setLoading(false);
     }
-  };
+  }, [userLocation, recommendedSpecialty, language, selectedFilter]);
+
+  useEffect(() => {
+    // Clear previous results when switching filters
+    setDoctors([]);
+    setError(null);
+
+    if (selectedFilter === 'city_search') {
+      setShowCitySearch(true);
+      return;
+    }
+
+    setShowCitySearch(false);
+    if (!recommendedSpecialty) return;
+
+    if (userLocation) {
+      searchDoctors();
+    } else {
+      // Without location, fall back to searching by city name.
+      setSelectedFilter('city_search');
+      setShowCitySearch(true);
+      setSearchCity('Pune'); // Default city
+      setSearchSpecialty(recommendedSpecialty);
+    }
+  }, [userLocation, recommendedSpecialty, selectedFilter, searchDoctors]);
 
   const handleFilterChange = (newFilter) => {
-    console.log(`🔄 Filter change: ${selectedFilter} → ${newFilter}`);
-    
     // Clear previous results immediately
     setDoctors([]);
     setError(null);
@@ -790,13 +714,11 @@ const DoctorRecommendations = ({
     
     // Clear city search data when switching away from city search
     if (selectedFilter === 'city_search' && newFilter !== 'city_search') {
-      console.log('🧹 Clearing city search state');
       setSearchCity('');
       setSearchSpecialty('');
     }
     
     setSelectedFilter(newFilter);
-    console.log('✅ Filter changed, useEffect will trigger search');
   };
 
   const searchDoctorsByCity = async () => {
@@ -805,12 +727,11 @@ const DoctorRecommendations = ({
       return;
     }
 
-    console.log(`🏙️ Searching doctors by city: ${searchCity}, specialty: ${searchSpecialty}`);
     setLoading(true);
     setError(null);
     
     try {
-      const response = await axios.post('http://127.0.0.1:8001/api/search-doctors-by-city', {
+      const response = await axios.post(apiUrl('/api/search-doctors-by-city'), {
         city: searchCity.trim(),
         specialty: searchSpecialty.trim(),
         language: language,
@@ -855,7 +776,7 @@ const DoctorRecommendations = ({
 
   const getDirections = (doctor) => {
     const url = `https://www.google.com/maps/dir/?api=1&destination=${doctor.latitude},${doctor.longitude}`;
-    window.open(url, '_blank');
+    openExternal(url);
   };
 
   const callDoctor = (phone) => {
@@ -863,7 +784,7 @@ const DoctorRecommendations = ({
   };
 
   const visitWebsite = (website) => {
-    window.open(website, '_blank');
+    openExternal(website);
   };
 
   if (loading) {
@@ -1014,7 +935,7 @@ const DoctorRecommendations = ({
                   <>
                     <span className="rating-value">{doctor.rating}</span>
                     <span className="review-count">
-                      ({doctor.review_count || 0} real {doctor.review_count === 1 ? 'review' : 'reviews'})
+                      ({doctor.review_count || 0} {doctor.review_count === 1 ? 'review' : 'reviews'})
                     </span>
                   </>
                 ) : (

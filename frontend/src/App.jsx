@@ -12,6 +12,7 @@ import AboutSection from './components/ui/AboutSection';
 import AyushmanBharatCard from './components/ui/AyushmanBharatCard';
 import DisclaimerModal from './components/ui/DisclaimerModal';
 import { EmergencyButton } from './components/ui/EmergencyButton';
+import { apiUrl, openExternal } from './config';
 
 // Simplified Translations
 const TRANSLATIONS = {
@@ -649,7 +650,7 @@ const AudioPlayer = ({ audioUrl, autoPlay = false }) => {
           <button 
             onClick={() => {
               if (audioUrl) {
-                window.open(audioUrl, '_blank');
+                openExternal(audioUrl);
               }
             }}
             style={{
@@ -729,7 +730,6 @@ function App() {
   const [showLanguageSelector, setShowLanguageSelector] = useState(true);
   const [showDisclaimer, setShowDisclaimer] = useState(false);
   const [conversation, setConversation] = useState([]);
-  const [isLoading, setIsLoading] = useState(false);
   const [apiStatus, setApiStatus] = useState('checking');
   const [computeMode, setComputeMode] = useState('auto'); // 'auto' | 'offline' | 'online'
   const [sttHealth, setSttHealth] = useState(null);
@@ -792,36 +792,44 @@ function App() {
     }
   }, [isOnline, computeMode]);
 
-  // API Connection Check
+  // API Connection Check: poll until the backend answers; one loop per
+  // language selection, cancelled when the language changes or on unmount.
   useEffect(() => {
-    if (language) {
-      checkApiConnection();
-    }
-  }, [language]);
+    if (!language) return undefined;
+    let cancelled = false;
+    let retryTimer = null;
 
-  const checkApiConnection = async () => {
-    try {
-      const response = await axios.get('http://127.0.0.1:8001/api', { timeout: 10000 });
-      if (response.status === 200) {
-        setApiStatus('connected');
-        checkSttHealth();
+    const checkSttHealth = async () => {
+      try {
+        const response = await axios.get(apiUrl('/api/stt-health'), { timeout: 30000 });
+        if (!cancelled) setSttHealth(response.data);
+      } catch (error) {
+        console.error('STT health check failed:', error);
+        if (!cancelled) setSttHealth({ ready: false, error: error.message });
       }
-    } catch (error) {
-      console.error('API connection failed:', error);
-      setApiStatus('error');
-      setTimeout(checkApiConnection, 5000);
-    }
-  };
+    };
 
-  const checkSttHealth = async () => {
-    try {
-      const response = await axios.get('http://127.0.0.1:8001/api/stt-health', { timeout: 30000 });
-      setSttHealth(response.data);
-    } catch (error) {
-      console.error('STT health check failed:', error);
-      setSttHealth({ ready: false, error: error.message });
-    }
-  };
+    const checkApiConnection = async () => {
+      try {
+        const response = await axios.get(apiUrl('/api'), { timeout: 10000 });
+        if (!cancelled && response.status === 200) {
+          setApiStatus('connected');
+          checkSttHealth();
+        }
+      } catch (error) {
+        if (cancelled) return;
+        console.error('API connection failed:', error);
+        setApiStatus('error');
+        retryTimer = setTimeout(checkApiConnection, 5000);
+      }
+    };
+
+    checkApiConnection();
+    return () => {
+      cancelled = true;
+      clearTimeout(retryTimer);
+    };
+  }, [language]);
 
   // Language Selection
   const handleLanguageSelect = (selectedLang) => {
@@ -891,14 +899,15 @@ function App() {
       formData.append('audio', webmFile);
       formData.append('language', language);
 
-      const response = await axios.post('http://127.0.0.1:8001/api/transcribe-audio', formData, {
+      const response = await axios.post(apiUrl('/api/transcribe-audio'), formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
 
       setTranscription(response.data.text);
     } catch (error) {
       console.error('Transcription failed:', error);
-      alert('Failed to transcribe audio. Please try again.');
+      const detail = error.response?.data?.detail;
+      alert(typeof detail === 'string' ? detail : 'Failed to transcribe audio. Please try again.');
       setRecordedAudio(null);
     } finally {
       setIsTranscribing(false);
@@ -959,7 +968,7 @@ function App() {
   const pollAudioStatus = async (filename, maxAttempts = 20) => {
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
-        const response = await axios.get(`http://127.0.0.1:8001/api/audio-status/${filename}`);
+        const response = await axios.get(apiUrl(`/api/audio-status/${filename}`));
         
         if (response.data.ready) {
           console.log(`🎵 Audio ready after ${attempt + 1} attempts, size: ${response.data.file_size} bytes`);
@@ -1032,7 +1041,7 @@ function App() {
       // if (demoHit) { ... }
 
       // Send to API
-      const response = await axios.post('http://127.0.0.1:8001/api/get-doctor-response', {
+      const response = await axios.post(apiUrl('/api/get-doctor-response'), {
         patient_text: patientText,
         typed_text: textInput || null,
         transcription_text: transcription || null,
@@ -1082,11 +1091,11 @@ function App() {
           const audioReady = await pollAudioStatus(filename);
           
           if (audioReady) {
-            finalAudioUrl = `http://127.0.0.1:8001${audioPath}`;
+            finalAudioUrl = apiUrl(audioPath);
             console.log('🎵 Audio URL constructed:', finalAudioUrl);
           } else {
             console.log('⚠️ Audio polling timeout, but proceeding with URL');
-            finalAudioUrl = `http://127.0.0.1:8001${audioPath}`;
+            finalAudioUrl = apiUrl(audioPath);
           }
         } else {
           console.log('⚠️ No audio_url received from API');
@@ -1126,7 +1135,8 @@ function App() {
       
       const errorMessage = {
         type: 'error',
-        content: `Error: ${error.message}`,
+        // The server sends a localized, patient-safe explanation in `detail`.
+        content: typeof error.response?.data?.detail === 'string' ? error.response.data.detail : `Error: ${error.message}`,
         timestamp: new Date().toLocaleTimeString()
       };
       
@@ -1261,7 +1271,7 @@ function App() {
           <LanguageCard>
             <Logo>
               <FaStethoscope size={48} />
-              <h1>MedMind AI Doctor</h1>
+              <h1>HealStation AI</h1>
             </Logo>
             
             <LanguageTitle>🌐 Select Language / भाषा चुनें / भाषा निवडा</LanguageTitle>
@@ -1319,8 +1329,13 @@ function App() {
               </select>
             </LanguageSelect>
             
-            <StatusBadge $connected={apiStatus === 'connected'}>
-              {apiStatus !== 'connected' ? '🔴 OFFLINE' : (computeMode === 'offline' ? '🔴 OFFLINE' : (navigator.onLine ? '🔴 OFFLINE' : '⚠️ No Wi-Fi'))}
+            <StatusBadge
+              $connected={apiStatus === 'connected'}
+              title={apiStatus === 'connected' ? 'Local AI server connected' : 'Cannot reach the local AI server'}
+            >
+              {apiStatus === 'connected'
+                ? (isOnline ? '🟢 Local AI ready' : '🟢 Local AI ready (no internet)')
+                : apiStatus === 'checking' ? '⏳ Connecting...' : '🔴 AI server unreachable'}
             </StatusBadge>
 
             <StatusBadge
@@ -1766,7 +1781,7 @@ function App() {
 
         {/* Footer */}
         <Footer>
-          <p>© 2025 MedMind AI Doctor. {t.disclaimer}</p>
+          <p>© {new Date().getFullYear()} HealStation AI. {t.disclaimer}</p>
         </Footer>
         
         {/* Find Doctors Button */}
@@ -1786,7 +1801,6 @@ function App() {
           <DoctorRecommendations
             userLocation={userLocation}
             recommendedSpecialty={specialistRecommendation}
-            diagnosis={conversation[conversation.length - 1]?.content}
             language={language}
           />
         )}

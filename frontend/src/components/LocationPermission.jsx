@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import styled from 'styled-components';
 import { FaMapMarkerAlt, FaShieldAlt, FaTimes, FaCheck } from 'react-icons/fa';
 
@@ -119,7 +119,6 @@ const LocationStatus = styled.div`
 const LocationPermission = ({ onLocationGranted, onLocationDenied, language = 'en' }) => {
   const [isRequesting, setIsRequesting] = useState(false);
   const [locationStatus, setLocationStatus] = useState(null);
-  const [userLocation, setUserLocation] = useState(null);
 
   const translations = {
     en: {
@@ -201,7 +200,6 @@ const LocationPermission = ({ onLocationGranted, onLocationDenied, language = 'e
         timestamp: Date.now()
       };
 
-      setUserLocation(location);
       setLocationStatus('success');
       
       // Call success callback after a brief delay to show success message

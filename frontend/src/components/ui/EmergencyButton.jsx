@@ -4,6 +4,7 @@ import styled, { keyframes } from 'styled-components';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FaExclamationTriangle, FaAmbulance, FaPhoneAlt, FaTimes } from 'react-icons/fa';
 import EmergencyTriage from './EmergencyTriage';
+import { API_BASE_URL } from '../../config';
 
 // ============ ANIMATIONS ============
 const pulse = keyframes`
@@ -212,7 +213,7 @@ export const EmergencyButton = ({
   showBanner = true,
   showQuickActions = true,
   compact = false,
-  apiBaseUrl = 'http://127.0.0.1:8001'
+  apiBaseUrl = API_BASE_URL
 }) => {
   const [isTriageOpen, setIsTriageOpen] = useState(false);
   const t = translations[language] || translations.en;
@@ -340,7 +341,7 @@ const FloatingLabel = styled(motion.div)`
 
 export const FloatingEmergencyButton = ({
   language = 'en',
-  apiBaseUrl = 'http://127.0.0.1:8001'
+  apiBaseUrl = API_BASE_URL
 }) => {
   const [isTriageOpen, setIsTriageOpen] = useState(false);
   const [showLabel, setShowLabel] = useState(true);

@@ -20,6 +20,7 @@ import {
   FaArrowRight
 } from 'react-icons/fa';
 import axios from 'axios';
+import { API_BASE_URL, openExternal } from '../../config';
 
 // ============ ANIMATIONS ============
 const pulse = keyframes`
@@ -30,11 +31,6 @@ const pulse = keyframes`
 const emergencyPulse = keyframes`
   0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.7); }
   50% { box-shadow: 0 0 0 15px rgba(220, 38, 38, 0); }
-`;
-
-const slideIn = keyframes`
-  from { transform: translateY(-20px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
 `;
 
 // ============ STYLED COMPONENTS ============
@@ -732,7 +728,7 @@ export const EmergencyTriage = ({
   language = 'en',
   initialSymptoms = '',
   userLocation = null,
-  apiBaseUrl = 'http://127.0.0.1:8001'
+  apiBaseUrl = API_BASE_URL
 }) => {
   const [symptoms, setSymptoms] = useState(initialSymptoms);
   const [selectedQuickSymptoms, setSelectedQuickSymptoms] = useState([]);
@@ -891,8 +887,10 @@ export const EmergencyTriage = ({
       
       // Try quick endpoint as fallback
       try {
-        const quickResponse = await axios.get(`${apiBaseUrl}/api/emergency-triage/quick`, {
-          params: { symptoms: allSymptoms },
+        // POST keeps symptoms out of the URL (and out of server access logs).
+        const quickResponse = await axios.post(`${apiBaseUrl}/api/emergency-triage/quick`, {
+          symptoms: allSymptoms
+        }, {
           timeout: 10000
         });
         
@@ -901,13 +899,13 @@ export const EmergencyTriage = ({
           hospitals: [],
           scores: null
         });
-      } catch (fallbackErr) {
+      } catch {
         setError('Unable to perform emergency assessment. Please call 108 directly.');
       }
     } finally {
       setIsLoading(false);
     }
-  }, [symptoms, selectedQuickSymptoms, location, apiBaseUrl]);
+  }, [symptoms, selectedQuickSymptoms, location, apiBaseUrl, language]);
 
   // Open Google Maps directions with user's actual location as origin
   const openDirections = (hospital) => {
@@ -923,7 +921,7 @@ export const EmergencyTriage = ({
       console.log(`🗺️ Opening directions to ${hospital.name} (origin: user's device location)`);
     }
     
-    window.open(url, '_blank');
+    openExternal(url);
   };
 
   if (!isOpen) return null;
