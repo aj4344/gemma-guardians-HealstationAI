@@ -234,9 +234,8 @@ def _transcribe_with_local_whisper(audio_path: str, language_code: str):
 
         improved_text = improve_transcription(raw_text, language_code)
         elapsed = time.monotonic() - start_time
-        logger.info(f"[LOCAL STT] Raw transcription: {raw_text}")
-        logger.info(f"[LOCAL STT] Improved transcription: {improved_text}")
-        logger.info(f"[LOCAL STT] Transcription completed in {elapsed:.2f}s")
+        # Never log the transcript itself: it is the patient's description of their health.
+        logger.info("[LOCAL STT] Transcription completed in %.2fs (%d chars)", elapsed, len(improved_text))
         return improved_text, None
     except Exception as error:
         elapsed = time.monotonic() - start_time

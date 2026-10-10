@@ -4,16 +4,13 @@ import os
 import sys
 from typing import Dict, Any, Optional
 
-# Add the current directory to sys.path to import from api.py
-sys.path.append(r'e:\KaggleGemma4\Doctor_AI_React_GoodEnglishAnalysis - Copy - Copy')
+# Make the repository root importable regardless of the working directory
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from api import _build_local_gemma_prompt, _extract_json_payload
+from config import LOCAL_GEMMA_MODEL, LOCAL_GEMMA_NUM_CTX, LOCAL_GEMMA_NUM_PREDICT, OLLAMA_BASE_URL
 
-# Configuration from .env
-LOCAL_GEMMA_URL = "http://127.0.0.1:11434/api/generate"
-LOCAL_GEMMA_MODEL = "gemma4:e2b"
-LOCAL_GEMMA_NUM_CTX = 1024
-LOCAL_GEMMA_NUM_PREDICT = 1400
+LOCAL_GEMMA_URL = f"{OLLAMA_BASE_URL}/api/generate"
 
 def benchmark_gemma(patient_text: str, language: str):
     print(f"--- Benchmarking Gemma for: '{patient_text}' ({language}) ---")

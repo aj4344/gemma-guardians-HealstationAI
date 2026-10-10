@@ -14,10 +14,8 @@ from advanced_doctor_service import (
     search_doctors_enhanced,
     search_doctors_by_city,
 )
-from enhanced_doctor_service import EnhancedDoctorSearchService
 
 __all__ = [
     "search_doctors_enhanced",
     "search_doctors_by_city",
-    "EnhancedDoctorSearchService",
 ]

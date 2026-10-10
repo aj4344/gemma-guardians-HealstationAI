@@ -41,7 +41,7 @@ echo   Health:  http://127.0.0.1:8001/api/ollama-health
 echo ============================================
 echo.
 
-REM Use the outer venv python explicitly (e:\KaggleGemma4\.venv) — this is the real runtime env
+REM Prefer a virtual environment one level up, then the project's own .venv
 if exist "..\.venv\Scripts\python.exe" (
     ..\.venv\Scripts\python.exe api.py
 ) else if exist ".venv\Scripts\python.exe" (

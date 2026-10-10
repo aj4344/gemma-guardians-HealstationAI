@@ -27,6 +27,7 @@ from config import (
     API_PORT,
     AUDIO_OUTPUT_DIR,
     AUDIO_RETENTION_SECONDS,
+    CORS_ALLOW_ORIGINS,
     ENABLE_LOCAL_TRIAGE,
     FAIRNESS_PARITY_THRESHOLD,
     FRONTEND_DIST_DIR,
@@ -51,7 +52,6 @@ from voice_of_the_patient import (
     LOCAL_STT_COMPUTE_TYPE,
     ENABLE_LOCAL_STT,
 )
-from doctor_search import EnhancedDoctorSearchService
 from doctor_search import search_doctors_enhanced as advanced_search_doctors, search_doctors_by_city as advanced_search_city
 
 # Import Emergency Triage Module
@@ -99,13 +99,16 @@ async def limit_request_size(request: Request, call_next):
         return JSONResponse(status_code=413, content={"detail": f"Request body exceeds {MAX_REQUEST_MB} MB."})
     return await call_next(request)
 
-# Configure CORS for frontend integration
+# CORS: only the configured UI origins may call the API from a browser.
+# A wildcard would let any website the health worker visits read patient
+# triage results from this local server. No cookies are used, so no
+# credentials are allowed either.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # For production, replace with specific origins
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=CORS_ALLOW_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
 )
 
 # Models for request/response
@@ -162,7 +165,6 @@ class DoctorSearchRequest(BaseModel):
     sort_by: str = "distance"
     limit: int = 20
     language: str = "en"
-    ai_response: Optional[str] = None  # AI doctor's response for semantic analysis
 
 class DoctorSearchResponse(BaseModel):
     doctors: List[Dict[str, Any]]
@@ -442,7 +444,7 @@ def _run_local_gemma_triage(
                 "num_predict": LOCAL_GEMMA_NUM_PREDICT,
             }
         }
-        print(f"[GEMMA] Calling Ollama /api/chat model={LOCAL_GEMMA_MODEL} num_ctx={LOCAL_GEMMA_NUM_CTX} mode=CPU-offload")
+        logger.info("Calling Ollama model=%s num_ctx=%d", LOCAL_GEMMA_MODEL, LOCAL_GEMMA_NUM_CTX)
         response = requests.post(chat_url, json=payload, timeout=LOCAL_GEMMA_TIMEOUT_SECONDS)
         response.raise_for_status()
 
@@ -453,15 +455,15 @@ def _run_local_gemma_triage(
         else:
             model_text = raw.get("response", "") if isinstance(raw, dict) else ""
 
-        print(f"[GEMMA] Raw output ({len(model_text)} chars): {model_text[:200]}")
+        logger.debug("Model output received (%d chars)", len(model_text))
         parsed = _extract_json_payload(model_text)
         if parsed:
-            print(f"[GEMMA] Parsed JSON: urgency={parsed.get('urgency')}, specialist={parsed.get('specialist')}")
+            logger.info("Model triage parsed: urgency=%s specialist=%s", parsed.get("urgency"), parsed.get("specialist"))
         else:
-            print("[GEMMA] WARNING: Could not parse JSON from model output")
+            logger.warning("Could not parse JSON from model output")
         return parsed
     except Exception as local_error:
-        print(f"[GEMMA] Local Gemma triage unavailable/failed: {local_error}")
+        logger.warning("Local Gemma triage unavailable/failed: %s", local_error)
         return None
 
 
@@ -531,7 +533,7 @@ def _build_emergency_fallback_triage(
             "doctor_response": triage_result.preliminary_assessment,
         }
     except Exception as emergency_error:
-        print(f"[API DEBUG] Emergency triage fallback failed: {emergency_error}")
+        logger.warning("Emergency triage fallback failed: %s", type(emergency_error).__name__)
         return None
 
 
@@ -1704,243 +1706,121 @@ async def get_voices():
     """
     return get_available_voices()
 
+def _format_directory_entry(entry: Dict[str, Any], specialty: str) -> Dict[str, Any]:
+    """Shape a static-directory entry for the UI.
+
+    Only facility-level data from the directory is passed through; fields the
+    directory cannot back up (ratings, fees, credentials, slots) are left for
+    the user to confirm with the facility.
+    """
+    distance_km = entry.get("user_distance_km", entry.get("distance_km"))
+    phone = entry.get("phone") or "Contact facility directly"
+    return {
+        "name": entry.get("name", "Medical Facility"),
+        "specialty": entry.get("specialty", specialty),
+        "hospital": entry.get("hospital", entry.get("clinic_name", "Medical Center")),
+        "clinic_name": entry.get("hospital", entry.get("clinic_name", "Medical Center")),
+        "address": entry.get("address", "Address not available"),
+        "location": entry.get("address", "Location not available"),
+        "latitude": entry.get("latitude"),
+        "longitude": entry.get("longitude"),
+        "distance": round(distance_km, 1) if distance_km is not None else None,
+        "distance_km": round(distance_km, 1) if distance_km is not None else None,
+        "distance_text": entry.get("user_distance", entry.get("distance", "Distance unavailable")),
+        "phone": phone,
+        "contact": phone,
+        "hours": entry.get("hours", "Contact facility for current hours"),
+        "available_today": entry.get("available_today", False),
+        "availability_status": entry.get("availability_status", "Contact for availability"),
+        "next_available": "Contact for appointment",
+        "rating": None,
+        "review_count": None,
+        "consultation_fee": "Contact for current fees",
+        "qualification": "Contact facility for qualifications",
+        "experience": "Contact facility for experience",
+        "registration_number": "Contact facility for registration details",
+        "source": entry.get("source", "static_directory"),
+        "data_type": entry.get("data_type", "directory_listing"),
+        "verified": bool(entry.get("verified", False)),
+        "verification_note": entry.get(
+            "verification_note", "Please verify current information with the facility."
+        ),
+        "safety_warning": "⚠️ Always call ahead to confirm doctor availability, fees, and appointment requirements",
+        "last_updated": entry.get("last_updated", "Not verified"),
+    }
+
+
 @app.post("/api/search-doctors", response_model=DoctorSearchResponse)
 async def search_doctors_endpoint(request: DoctorSearchRequest):
-    """
-    🚨 VERIFIED HOSPITALS ONLY - Medical Safety First
-    Returns ONLY verified real hospitals with confirmed phone numbers
-    NO fake doctors, NO generated credentials, NO misleading information
-    """
+    """Find listed specialists near a location (offline static directory)."""
+    search_params = {
+        "latitude": request.latitude,
+        "longitude": request.longitude,
+        "specialty": request.specialty,
+        "radius": request.radius,
+        "sort_by": request.sort_by,
+        "limit": request.limit,
+        "language": request.language,
+        "data_source": "static_directory",
+        "verified": False,
+    }
     try:
-        print(f"🏥 [API] REAL LOCATION-BASED medical search for {request.specialty} near {request.latitude}, {request.longitude}")
-        
-        # ✅ ADVANCED ENHANCED SEARCH: Use the new advanced service with top-rated sorting
-        try:
-            # Use the advanced search function that queries the static medical database
-            medical_facilities = await advanced_search_doctors(
-                specialty=request.specialty,
-                latitude=request.latitude,
-                longitude=request.longitude,
-                radius=request.radius,
-                sort_by=request.sort_by,
-                limit=request.limit
-            )
-            
-            print(f"✅ Advanced enhanced search found {len(medical_facilities)} medical facilities")
-                
-        except Exception as search_error:
-            print(f"⚠️ Advanced search error: {search_error}")
-            
-            # Fallback to previous enhanced service
-            try:
-                enhanced_service = EnhancedDoctorSearchService()
-                medical_facilities = await enhanced_service.search_doctors_enhanced(
-                    specialty=request.specialty,
-                    latitude=request.latitude,
-                    longitude=request.longitude,
-                    radius=request.radius,
-                    sort_by=request.sort_by,
-                    limit=request.limit
-                )
-                print(f"✅ Fallback enhanced search found {len(medical_facilities)} medical facilities")
-            except Exception as fallback_error:
-                print(f"⚠️ Fallback search error: {fallback_error}")
-                medical_facilities = []
-        
-        # Convert to API format - Enhanced advanced data structure
-        formatted_doctors = []
-        for medical_facility in medical_facilities:
-            # ✅ Handle enhanced dictionary format from advanced service with MEDICAL SAFETY VERIFICATION
-            formatted_doctors.append({
-                "name": medical_facility.get("name", "Medical Facility"),
-                "specialty": medical_facility.get("specialty", request.specialty),
-                "qualification": medical_facility.get("qualifications", medical_facility.get("qualification", "Contact facility for qualifications")),
-                "experience": medical_facility.get("experience", "Contact facility for experience"),
-                "hospital": medical_facility.get("hospital", medical_facility.get("clinic_name", "Medical Center")),
-                "location": medical_facility.get("location", medical_facility.get("address", "Location not available")),
-                "contact": medical_facility.get("phone", "Contact facility directly"),  # SAFETY: No unverified numbers
-                "rating": medical_facility.get("rating", "") if medical_facility.get("rating") else "Contact for ratings",  # SAFETY: No fake ratings
-                "consultation_fee": medical_facility.get("consultation_fee", "Contact for current fees"),  # SAFETY: No unverified fees
-                "address": medical_facility.get("address", "Address not available"),
-                "latitude": medical_facility.get("latitude", request.latitude),
-                "longitude": medical_facility.get("longitude", request.longitude),
-                "registration_number": "Contact facility for registration details",  # SAFETY: No fake registration numbers
-                "source": medical_facility.get("source", "advanced_search"),
-                "verified": medical_facility.get("verified", False) or medical_facility.get("source") == "prominent_medical",  # Mark prominent medical as verified
-                "fake_data": False,
-                "real_data": True,
-                "distance_km": medical_facility.get("distance_km", 0.0),
-                "distance": medical_facility.get("distance_km", 0.0),
-                "distance_text": medical_facility.get("distance", "Distance unavailable"),
-                "clinic_name": medical_facility.get("hospital", medical_facility.get("clinic_name", medical_facility.get("name", "Medical Center"))),
-                "phone": medical_facility.get("phone", "Contact facility directly"),  # SAFETY: Consistent with contact
-                "hours": medical_facility.get("hours", medical_facility.get("availability", "Contact facility for current hours")),
-                "review_count": medical_facility.get("reviews_count", "") if medical_facility.get("reviews_count") else "Contact for reviews",
-                "verification_note": medical_facility.get("verification_note", "Please verify current information with facility"),
-                "safety_warning": "⚠️ Always call ahead to confirm doctor availability, fees, and appointment requirements",
-                "data_type": medical_facility.get("data_type", "enhanced_search"),
-                "available_today": medical_facility.get("available_today", True),
-                "availability_status": medical_facility.get("availability_status", "Contact for availability"),
-                "next_available": medical_facility.get("next_available", "Contact for appointment"),
-                "last_updated": medical_facility.get("last_updated", "Recently updated")
-            })
-        
-        total_found = len(formatted_doctors)
-        
-        print(f"✅ [API] ADVANCED LOCATION-BASED search found {total_found} medical facilities")
-        print(f"   📍 Near location: {request.latitude}, {request.longitude}")
-        print(f"   🏥 All data from verified hospital database")
-        print(f"   🎯 Sort by: {request.sort_by}")
-        print(f"   ❌ NO fake doctors or credentials")
-        
-        return DoctorSearchResponse(
-            doctors=formatted_doctors,
-            total_found=total_found,
-            search_params={
-                "latitude": request.latitude,
-                "longitude": request.longitude,
-                "specialty": request.specialty,
-                "radius": request.radius,
-                "sort_by": request.sort_by,
-                "limit": request.limit,
-                "language": request.language,
-                "api_used": "advanced_doctor_service_enhanced_search",
-                "enhanced_search": True,
-                "real_data_only": True,
-                "fake_data_removed": True,
-                "location_based": True,
-                "verification": "Data from verified hospital database"
-            }
+        entries = await advanced_search_doctors(
+            specialty=request.specialty,
+            latitude=request.latitude,
+            longitude=request.longitude,
+            radius=request.radius,
+            sort_by=request.sort_by,
+            limit=request.limit,
         )
-        
-    except Exception as e:
-        print(f"[API ERROR] Verified medical data search failed: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        
-        # Return empty results on error - NO FAKE FALLBACK
-        return DoctorSearchResponse(
-            doctors=[],
-            total_found=0,
-            search_params={
-                "error": str(e), 
-                "real_medical_search": True,
-                "fake_data_fallback": False,
-                "message": "Real data search failed. No fake data provided."
-            }
-        )
+    except Exception:
+        logger.exception("Doctor search failed")
+        return DoctorSearchResponse(doctors=[], total_found=0, search_params={**search_params, "error": "search_failed"})
+
+    doctors = [_format_directory_entry(entry, request.specialty) for entry in entries]
+    return DoctorSearchResponse(doctors=doctors, total_found=len(doctors), search_params=search_params)
+
 
 @app.post("/api/search-doctors-by-city", response_model=CitySearchResponse)
 async def search_doctors_by_city_endpoint(request: CitySearchRequest):
-    """
-    🏙️ ADVANCED CITY-BASED SEARCH - Find doctors in any Indian city
-    Allows users to search for specialists in specific cities
-    Returns ONLY verified real hospitals with confirmed information
-    """
+    """Find listed specialists in a named Indian city (offline static directory)."""
+    search_params = {
+        "city": request.city,
+        "specialty": request.specialty,
+        "sort_by": request.sort_by,
+        "limit": request.limit,
+        "language": request.language,
+        "data_source": "static_directory",
+        "verified": False,
+    }
     try:
-        print(f"🏙️ [API] ADVANCED CITY-BASED search for {request.specialty} in {request.city}")
-        
-        # ✅ ADVANCED CITY-BASED SEARCH: Use the new advanced city search function
-        medical_facilities = await advanced_search_city(
+        entries = await advanced_search_city(
             city=request.city,
             specialty=request.specialty,
             sort_by=request.sort_by,
             limit=request.limit,
             user_latitude=request.user_latitude,
-            user_longitude=request.user_longitude
+            user_longitude=request.user_longitude,
         )
-        
-        # Convert to API format with enhanced data structure
-        formatted_doctors = []
-        city_coordinates = None
-        
-        for medical_facility in medical_facilities:
-            # Extract city coordinates from first result if available
-            if not city_coordinates and medical_facility.get("city_coordinates"):
-                city_coordinates = medical_facility["city_coordinates"]
-            
-            # ✅ Handle enhanced dictionary format from advanced service
-            formatted_doctors.append({
-                "name": medical_facility.get("name", "Medical Facility"),
-                "specialty": medical_facility.get("specialty", request.specialty),
-                "qualification": medical_facility.get("qualifications", medical_facility.get("qualification", "Contact facility for qualifications")),
-                "experience": medical_facility.get("experience", "Contact facility for experience"),
-                "hospital": medical_facility.get("hospital", medical_facility.get("clinic_name", "Medical Center")),
-                "location": medical_facility.get("location", medical_facility.get("address", "Location not available")),
-                "contact": medical_facility.get("phone", medical_facility.get("contact", "Contact facility directly")),
-                "rating": medical_facility.get("rating", "Contact for ratings"),
-                "consultation_fee": medical_facility.get("consultation_fee", "Contact for current fees"),
-                "address": medical_facility.get("address", "Address not available"),
-                "latitude": medical_facility.get("latitude", 0.0),
-                "longitude": medical_facility.get("longitude", 0.0),
-                "registration_number": medical_facility.get("registration_number", "Not available"),
-                "source": medical_facility.get("source", "advanced_search"),
-                "verified": medical_facility.get("verified", False),
-                "fake_data": False,
-                "real_data": True,
-                "distance_km": medical_facility.get("distance_km", medical_facility.get("user_distance_km", 0)),
-                "distance": medical_facility.get("distance", medical_facility.get("user_distance", "Distance unavailable")),
-                "distance_text": medical_facility.get("distance", medical_facility.get("user_distance", "Distance unavailable")),
-                "clinic_name": medical_facility.get("hospital", medical_facility.get("clinic_name", "Medical Center")),
-                "phone": medical_facility.get("phone", "Contact facility directly"),
-                "hours": medical_facility.get("hours", medical_facility.get("availability", "Contact for hours")),
-                "review_count": medical_facility.get("reviews_count", "Contact for reviews"),
-                "city": request.city,
-                "city_search": True,
-                "data_type": medical_facility.get("data_type", "enhanced_search"),
-                "available_today": medical_facility.get("available_today", True),
-                "availability_status": medical_facility.get("availability_status", "Contact for availability"),
-                "next_available": medical_facility.get("next_available", "Contact for appointment"),
-                "last_updated": medical_facility.get("last_updated", "Recently updated")
-            })
-        
-        total_found = len(formatted_doctors)
-        
-        print(f"✅ [API] CITY-BASED search found {total_found} medical facilities in {request.city}")
-        print(f"   🏙️ City: {request.city}")
-        print(f"   🏥 Specialty: {request.specialty}")
-        print(f"   ❌ NO fake doctors or credentials")
-        
+    except Exception:
+        logger.exception("City doctor search failed")
         return CitySearchResponse(
-            doctors=formatted_doctors,
-            total_found=total_found,
-            city_coordinates=city_coordinates,
-            search_params={
-                "city": request.city,
-                "specialty": request.specialty,
-                "sort_by": request.sort_by,
-                "limit": request.limit,
-                "language": request.language,
-                "user_latitude": request.user_latitude,
-                "user_longitude": request.user_longitude,
-                "api_used": "advanced_doctor_service_city_search",
-                "advanced_search": True,
-                "real_data_only": True,
-                "fake_data_removed": True,
-                "city_based": True,
-                "verification": "Data from verified hospital database"
-            }
+            doctors=[], total_found=0, city_coordinates=None,
+            search_params={**search_params, "error": "search_failed"},
         )
-        
-    except Exception as e:
-        print(f"[API ERROR] City-based medical search failed: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        
-        # Return empty results on error - NO FAKE FALLBACK
-        return CitySearchResponse(
-            doctors=[],
-            total_found=0,
-            city_coordinates=None,
-            search_params={
-                "error": str(e), 
-                "city": request.city,
-                "specialty": request.specialty,
-                "real_medical_search": True,
-                "fake_data_fallback": False,
-                "message": "City-based search failed. No fake data provided."
-            }
-        )
+
+    city_coordinates = next((e["city_coordinates"] for e in entries if e.get("city_coordinates")), None)
+    doctors = [
+        {**_format_directory_entry(entry, request.specialty), "city": request.city, "city_search": True}
+        for entry in entries
+    ]
+    return CitySearchResponse(
+        doctors=doctors,
+        total_found=len(doctors),
+        city_coordinates=city_coordinates,
+        search_params=search_params,
+    )
+
 
 @app.get("/api/audio-status/{filename}")
 def check_audio_status(filename: str):
@@ -1985,7 +1865,7 @@ hospital_router = HospitalRoutingService()
 
 class QuickTriageRequest(BaseModel):
     """Quick triage check for real-time symptom analysis"""
-    symptoms: str = Field(..., min_length=3, description="Symptom description")
+    symptoms: str = Field(..., max_length=MAX_TEXT_CHARS, description="Symptom description")
 
 
 class QuickTriageResponse(BaseModel):
@@ -2016,15 +1896,14 @@ async def emergency_triage(request: EmergencyTriageRequest):
     professional medical judgment. In emergencies, CALL 108 IMMEDIATELY.
     """
     try:
-        print(f"🚨 [EMERGENCY TRIAGE] Processing request")
-        print(f"   Symptoms: {request.symptoms[:100]}...")
         
         # Step 1: Classify emergency level and calculate scores
         triage_result = emergency_classifier.classify(request)
         
-        print(f"   Triage Level: {triage_result.triage_level} ({triage_result.triage_level_name})")
-        print(f"   Emergency Type: {triage_result.emergency_type}")
-        print(f"   Call 108: {triage_result.call_108}")
+        logger.info(
+            "Emergency triage: level=%s type=%s call_108=%s",
+            triage_result.triage_level, triage_result.emergency_type, triage_result.call_108,
+        )
         
         # Step 2: Find nearby emergency hospitals if location provided
         if request.latitude and request.longitude:
@@ -2056,18 +1935,15 @@ async def emergency_triage(request: EmergencyTriageRequest):
                     hospitals, triage_result.emergency_type
                 )
                 
-                print(f"   Found {len(hospitals)} nearby hospitals")
                 
-            except Exception as hospital_error:
-                print(f"⚠️ Hospital routing error: {hospital_error}")
+            except Exception:
+                logger.exception("Hospital routing failed")
                 # Continue without hospital data
         
         return triage_result
         
-    except Exception as e:
-        print(f"❌ [EMERGENCY TRIAGE ERROR] {str(e)}")
-        import traceback
-        traceback.print_exc()
+    except Exception:
+        logger.exception("Emergency triage failed")
         
         # Return a safe fallback - always recommend calling 108 on error
         raise HTTPException(
@@ -2076,19 +1952,7 @@ async def emergency_triage(request: EmergencyTriageRequest):
         )
 
 
-@app.get("/api/emergency-triage/quick")
-async def quick_emergency_triage(symptoms: str):
-    """
-    🚨 QUICK TRIAGE CHECK (GET request for real-time analysis)
-    
-    Fast keyword-based triage for real-time symptom entry.
-    Use this for instant feedback as user types symptoms.
-    
-    Query params:
-        symptoms: The symptom text to analyze
-    
-    Returns basic triage level without full scoring.
-    """
+def _quick_triage(symptoms: str) -> Dict[str, Any]:
     try:
         if not symptoms or len(symptoms) < 3:
             return {
@@ -2100,22 +1964,33 @@ async def quick_emergency_triage(symptoms: str):
                 "icon": "ℹ️",
                 "matched_keywords": []
             }
-        
-        result = emergency_classifier.quick_classify(symptoms)
-        return QuickTriageResponse(**result)
-        
-    except Exception as e:
-        print(f"⚠️ Quick triage error: {e}")
-        # Safe fallback
+        return QuickTriageResponse(**emergency_classifier.quick_classify(symptoms)).model_dump()
+    except Exception:
+        logger.exception("Quick triage failed")
         return {
             "triage_level": 4,
             "triage_level_name": "standard",
             "triage_color": "#22C55E",
             "call_108": False,
-            "action": "Please consult a healthcare provider",
-            "icon": "✅",
+            "action": "Quick check unavailable. If symptoms are severe, call 108.",
+            "icon": "ℹ️",
             "matched_keywords": []
         }
+
+
+@app.post("/api/emergency-triage/quick", response_model=QuickTriageResponse)
+async def quick_emergency_triage(request: QuickTriageRequest):
+    """
+    🚨 QUICK TRIAGE CHECK — fast keyword-based triage for real-time feedback
+    as the user types. Returns a basic triage level without full scoring.
+    """
+    return _quick_triage(request.symptoms)
+
+
+@app.get("/api/emergency-triage/quick", response_model=QuickTriageResponse, deprecated=True)
+async def quick_emergency_triage_get(symptoms: str):
+    """Deprecated: puts symptoms in the URL (and so in access logs). Use POST."""
+    return _quick_triage(symptoms)
 
 
 @app.post("/api/emergency-hospitals")
@@ -2131,8 +2006,6 @@ async def find_emergency_hospitals(request: HospitalSearchRequest):
     2. Distance from user
     """
     try:
-        print(f"🏥 [HOSPITAL SEARCH] Near ({request.latitude}, {request.longitude})")
-        print(f"   Required: {request.required_capabilities}")
         
         hospitals = await hospital_router.find_emergency_hospitals(request)
         
@@ -2148,8 +2021,8 @@ async def find_emergency_hospitals(request: HospitalSearchRequest):
             "nearest_with_er": hospitals[0].model_dump() if hospitals else None
         }
         
-    except Exception as e:
-        print(f"❌ Hospital search error: {e}")
+    except Exception:
+        logger.exception("Hospital search failed")
         raise HTTPException(
             status_code=500,
             detail="Hospital search failed. For emergencies, CALL 108."

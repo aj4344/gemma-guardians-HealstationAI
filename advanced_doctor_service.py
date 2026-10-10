@@ -5,11 +5,21 @@ with Top-Rated, City Search, Time-based filtering and advanced sorting
 """
 
 import asyncio
-import aiohttp
-import os
+import logging
 from typing import List, Dict, Optional
-from datetime import datetime, time
+from datetime import datetime
 import math
+
+logger = logging.getLogger(__name__)
+
+# The static directory below has not been verified against an authoritative
+# source. Only facility-level details (hospital, address, main phone, listed
+# hours, location) are returned; per-doctor ratings, review counts, fees,
+# experience, qualifications and appointment slots are never shown to users.
+DIRECTORY_VERIFICATION_NOTE = (
+    "Directory listing, not independently verified. Call the hospital to confirm "
+    "the doctor, timings and fees before visiting."
+)
 
 class AdvancedDoctorSearchService:
     def __init__(self):
@@ -786,8 +796,8 @@ class AdvancedDoctorSearchService:
             )
             doctor_copy["available_today"] = self._is_available_today(doctor)
             doctor_copy["clinic_name"] = doctor["hospital"]
-            doctor_copy["data_type"] = "real_doctor"
-            doctor_copy["verified"] = True
+            doctor_copy["data_type"] = "directory_listing"
+            doctor_copy["verified"] = False
             enhanced_doctors.append(doctor_copy)
         
         return enhanced_doctors
@@ -842,67 +852,45 @@ class AdvancedDoctorSearchService:
             sort_by: Sorting criteria - "distance", "rating", "reviews", "availability", "experience"
             limit: Maximum results to return
         """
-        print(f"🔍 ADVANCED Enhanced search for {specialty} near {latitude}, {longitude}")
-        print(f"🎯 Sort by: {sort_by}, Limit: {limit}")
-        
-        # Step 1: Get REAL doctors from prominent medical database 
         city = self._determine_city(latitude, longitude)
         prominent_doctors = self._get_prominent_doctors(city, specialty, latitude, longitude)
-        print(f"🏥 Prominent medical database found: {len(prominent_doctors)} doctors in {city}")
-        
-        # Step 2: Combine results with enhanced medical data
+        logger.debug("Directory search: %d %s entries in %s", len(prominent_doctors), specialty, city)
+
         all_results = []
         seen_facilities = set()
-        
-        # Add prominent doctors first (priority to verified medical professionals)
         for doctor in prominent_doctors:
             facility_key = f"{doctor['name'].lower()}_{doctor['hospital'].lower()}"
-            if facility_key not in seen_facilities:
-                all_results.append({
-                    "name": doctor['name'],
-                    "specialty": doctor['specialty'],
-                    "hospital": doctor['hospital'],
-                    "address": doctor['address'],
-                    "phone": doctor['phone'],
-                    "rating": doctor['rating'],
-                    "reviews_count": doctor['reviews_count'],
-                    "consultation_fee": doctor['consultation_fee'],
-                    "experience": doctor['experience'],
-                    "qualifications": doctor['qualifications'],
-                    "latitude": doctor['latitude'],
-                    "longitude": doctor['longitude'],
-                    "distance": doctor['distance'],
-                    "distance_km": doctor['distance_km'],
-                    "source": doctor['source'],
-                    "data_type": "real_doctor",
-                    "available_today": doctor['available_today'],
-                    "clinic_name": doctor['hospital'],
-                    "verified": True,
-                    "hours": doctor.get('availability', "Contact facility for hours"),
-                    "availability_status": "Available" if doctor['available_today'] else "Contact for availability",
-                    "next_available": doctor.get('next_available', "Contact for appointment"),
-                    "last_updated": "2024-01-21"
-                })
-                seen_facilities.add(facility_key)
-        
-        # Step 3: Apply advanced sorting based on user preference
-        all_results = self._apply_advanced_sorting(all_results, sort_by)
-        
-        # Step 4: Apply smart filtering and limit
-        result = all_results[:limit]
-        print(f"✅ ADVANCED Enhanced search returning {len(result)} total results")
-        
-        real_doctors_count = len([r for r in result if r.get('data_type') == 'real_doctor'])
-        
-        print(f"   - Real doctors from medical directories: {real_doctors_count}")
-        print(f"   - Sort criteria: {sort_by}")
-        print(f"   - NO FAKE DATA: 100% authentic information")
-        
+            if facility_key in seen_facilities:
+                continue
+            seen_facilities.add(facility_key)
+            all_results.append({
+                "name": doctor['name'],
+                "specialty": doctor['specialty'],
+                "hospital": doctor['hospital'],
+                "address": doctor['address'],
+                "phone": doctor['phone'],
+                "latitude": doctor['latitude'],
+                "longitude": doctor['longitude'],
+                "distance": doctor['distance'],
+                "distance_km": doctor['distance_km'],
+                "source": doctor['source'],
+                "data_type": "directory_listing",
+                "available_today": doctor['available_today'],
+                "clinic_name": doctor['hospital'],
+                "verified": False,
+                "verification_note": DIRECTORY_VERIFICATION_NOTE,
+                "hours": doctor.get('availability', "Contact facility for hours"),
+                "availability_status": "Listed as open today" if doctor['available_today'] else "Contact for availability",
+                "next_available": "Contact for appointment",
+                "last_updated": "Not verified",
+            })
+
+        result = self._apply_advanced_sorting(all_results, sort_by)[:limit]
+        logger.debug("Directory search returning %d results (sort=%s)", len(result), sort_by)
         return result
 
     def _apply_advanced_sorting(self, doctors: List[Dict], sort_by: str) -> List[Dict]:
         """Apply advanced sorting based on multiple criteria with safe numeric handling"""
-        print(f"🔄 Applying {sort_by} sorting to {len(doctors)} results")
         
         # Helper function to safely extract numeric rating
         def safe_rating(doctor):
@@ -997,7 +985,7 @@ class AdvancedDoctorSearchService:
             
         else:
             # Default to distance sorting
-            print(f"⚠️ Unknown sort criteria '{sort_by}', defaulting to distance")
+            logger.debug("Unknown sort criteria %r, defaulting to distance", sort_by)
             return sorted(doctors, key=lambda x: x.get('distance_km', 999))
 
     async def search_doctors_by_city(self, city: str, specialty: str, sort_by: str = "rating", 
@@ -1014,16 +1002,14 @@ class AdvancedDoctorSearchService:
             user_latitude: Optional user location for distance calculation
             user_longitude: Optional user location for distance calculation
         """
-        print(f"🏙️ ADVANCED City-based search for {specialty} in {city}")
-        print(f"🎯 Sort by: {sort_by}, Limit: {limit}")
+        logger.debug("City search for %s in %s (sort=%s, limit=%d)", specialty, city, sort_by, limit)
         
         # Step 1: Get city coordinates using enhanced geocoding
         city_coords = await self._geocode_city(city)
         if not city_coords:
-            print(f"❌ Could not find coordinates for city: {city}")
+            logger.debug("Unknown city: %s", city)
             return []
         
-        print(f"📍 City coordinates: {city_coords['latitude']}, {city_coords['longitude']}")
         
         # Step 2: Search using city coordinates
         doctors = await self.search_doctors_enhanced(
@@ -1037,7 +1023,6 @@ class AdvancedDoctorSearchService:
         
         # Step 3: If user location provided, recalculate distances from user
         if user_latitude and user_longitude:
-            print(f"🧭 Recalculating distances from user location")
             for doctor in doctors:
                 if doctor.get('latitude') and doctor.get('longitude'):
                     user_distance = self._calculate_distance(
@@ -1053,7 +1038,7 @@ class AdvancedDoctorSearchService:
             doctor['city_search'] = True
             doctor['city_coordinates'] = city_coords
         
-        print(f"✅ City-based search found {len(doctors)} results in {city}")
+        logger.debug("City search found %d results in %s", len(doctors), city)
         return doctors
 
     async def _geocode_city(self, city: str) -> Optional[Dict[str, float]]:
@@ -1108,7 +1093,6 @@ class AdvancedDoctorSearchService:
             return known_cities[city_lower]
         
         # Final fallback: Return None
-        print(f"❌ City '{city}' not found in database")
         return None
 
 # Main enhanced search function for API compatibility
@@ -1146,55 +1130,11 @@ async def search_doctors_by_city(city: str, specialty: str, sort_by: str = "rati
         user_longitude=user_longitude
     )
 
-# Test function
-async def test_advanced_search():
-    """Test ADVANCED doctor search features"""
-    print("🧪 Testing ADVANCED Enhanced Doctor Search")
-    print("=" * 50)
-    
-    # Test 1: Top-rated search
-    print("\n🏆 TEST 1: Top-rated cardiologists in Pune")
-    doctors = await search_doctors_enhanced(
-        specialty="cardiologist",
-        latitude=18.5204,
-        longitude=73.8567,
-        sort_by="rating",
-        limit=5
-    )
-    
-    if doctors:
-        print(f"✅ Found {len(doctors)} top-rated cardiologists:")
-        for i, doctor in enumerate(doctors, 1):
-            print(f"{i}. {doctor['name']} - {doctor['rating']}⭐ ({doctor['reviews_count']} reviews)")
-    
-    # Test 2: City-based search
-    print("\n🏙️ TEST 2: City-based search - Dermatologists in Mumbai")
-    city_doctors = await search_doctors_by_city(
-        city="Mumbai",
-        specialty="dermatologist",
-        sort_by="rating",
-        limit=5
-    )
-    
-    if city_doctors:
-        print(f"✅ Found {len(city_doctors)} dermatologists in Mumbai:")
-        for i, doctor in enumerate(city_doctors, 1):
-            print(f"{i}. {doctor['name']} - {doctor['rating']}⭐")
-    
-    # Test 3: Most reviews search
-    print("\n📊 TEST 3: Most reviewed doctors")
-    review_doctors = await search_doctors_enhanced(
-        specialty="nephrologist",
-        latitude=18.5204,
-        longitude=73.8567,
-        sort_by="reviews",
-        limit=3
-    )
-    
-    if review_doctors:
-        print(f"✅ Found {len(review_doctors)} most reviewed nephrologists:")
-        for i, doctor in enumerate(review_doctors, 1):
-            print(f"{i}. {doctor['name']} - {doctor['reviews_count']} reviews")
+# Manual smoke test: python advanced_doctor_service.py
+async def _demo():
+    for doctor in await search_doctors_by_city(city="Pune", specialty="cardiologist", limit=5):
+        print(f"{doctor['name']} — {doctor['hospital']} ({doctor['distance']}) {doctor['phone']}")
+
 
 if __name__ == "__main__":
-    asyncio.run(test_advanced_search())
+    asyncio.run(_demo())

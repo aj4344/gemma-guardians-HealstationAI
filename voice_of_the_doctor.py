@@ -131,7 +131,7 @@ def generate_doctor_voice(text: str, output_filepath: str = "current_doctor_resp
     """
     output_path, error = _text_to_speech_core(text, output_filepath, lang)
     if error:
-        print(f"Failed to generate speech: {error}")
+        logger.warning("Failed to generate speech: %s", error)
     return output_path
 
 def speak_as_doctor(text: str, lang='en'):
@@ -176,12 +176,12 @@ def get_doctor_voice_for_ui(text: str, output_filepath: str = "doctor_response.m
     Returns:
         str: Path to the audio file for the UI
     """
-    print(f"Generating doctor voice for UI in {language_code}: {text[:50]}...")
-    
+    logger.debug("Generating doctor voice for UI in %s (%d chars)", language_code, len(text))
+
     output_path = generate_doctor_voice(text, output_filepath, lang=language_code)
 
     if not output_path or not os.path.exists(output_path):
-        print(f"Failed to generate doctor's voice for UI in {language_code}.")
+        logger.warning("Failed to generate doctor's voice for UI in %s.", language_code)
         return None
 
     return output_path
