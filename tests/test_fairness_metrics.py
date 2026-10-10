@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from fastapi.testclient import TestClient
 import pytest
+from fastapi.testclient import TestClient
 
 import api
 from emergency_triage.fairness_engine import FairnessTracker

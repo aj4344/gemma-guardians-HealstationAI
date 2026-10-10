@@ -9,6 +9,7 @@ recovers exactly. Re-run it on real de-identified reports before release.
 
 Usage: python scripts/spikes/spike03_ocr.py [--json out.json]
 """
+
 from __future__ import annotations
 
 import argparse

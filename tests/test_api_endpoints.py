@@ -1,4 +1,5 @@
 """Regression tests for API endpoint behaviour and configuration."""
+
 import inspect
 import os
 import re

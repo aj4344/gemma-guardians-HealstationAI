@@ -4,7 +4,7 @@ Fairness metrics tracker for demographic parity checks.
 
 from dataclasses import dataclass
 from threading import Lock
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from .constants import (
     FAIRNESS_AGE_GROUPS,
@@ -21,7 +21,7 @@ class GroupStats:
     confidence_sum: float = 0.0
     confidence_count: int = 0
 
-    def record(self, is_correct: Optional[bool], confidence: Optional[float]) -> None:
+    def record(self, is_correct: bool | None, confidence: float | None) -> None:
         self.total += 1
 
         if is_correct is not None:
@@ -38,12 +38,12 @@ class GroupStats:
         self.confidence_sum += confidence_value
         self.confidence_count += 1
 
-    def accuracy(self) -> Optional[float]:
+    def accuracy(self) -> float | None:
         if self.accuracy_count == 0:
             return None
         return self.correct / self.accuracy_count
 
-    def avg_confidence(self) -> Optional[float]:
+    def avg_confidence(self) -> float | None:
         if self.confidence_count == 0:
             return None
         return self.confidence_sum / self.confidence_count
@@ -54,9 +54,9 @@ class FairnessTracker:
 
     def __init__(
         self,
-        age_groups: Optional[list] = None,
-        gender_groups: Optional[list] = None,
-        language_groups: Optional[Dict[str, str]] = None,
+        age_groups: list | None = None,
+        gender_groups: list | None = None,
+        language_groups: dict[str, str] | None = None,
         parity_threshold: float = 0.05,
     ) -> None:
         self._lock = Lock()
@@ -66,15 +66,9 @@ class FairnessTracker:
         self._gender_groups = gender_groups or list(FAIRNESS_GENDER_GROUPS)
         self._language_groups = language_groups or dict(FAIRNESS_LANGUAGE_GROUPS)
 
-        self._age_stats = {
-            group["label"]: GroupStats() for group in self._age_groups
-        }
-        self._gender_stats = {
-            group: GroupStats() for group in self._gender_groups
-        }
-        self._language_stats = {
-            label: GroupStats() for label in self._language_groups.values()
-        }
+        self._age_stats = {group["label"]: GroupStats() for group in self._age_groups}
+        self._gender_stats = {group: GroupStats() for group in self._gender_groups}
+        self._language_stats = {label: GroupStats() for label in self._language_groups.values()}
         self._language_aliases = {
             "en": "en",
             "english": "en",
@@ -98,11 +92,11 @@ class FairnessTracker:
 
     def record_case(
         self,
-        age: Optional[Any],
-        gender: Optional[Any],
-        language: Optional[Any],
-        is_correct: Optional[bool],
-        confidence: Optional[float],
+        age: Any | None,
+        gender: Any | None,
+        language: Any | None,
+        is_correct: bool | None,
+        confidence: float | None,
     ) -> None:
         age_group = self._bucket_age(age)
         gender_group = self._normalize_gender(gender)
@@ -117,7 +111,7 @@ class FairnessTracker:
             if language_group:
                 self._language_stats[language_group].record(is_correct, confidence)
 
-    def get_metrics(self) -> Dict[str, Any]:
+    def get_metrics(self) -> dict[str, Any]:
         with self._lock:
             age_metrics = self._build_dimension_metrics(self._age_stats)
             gender_metrics = self._build_dimension_metrics(self._gender_stats)
@@ -183,7 +177,7 @@ class FairnessTracker:
                 stats.confidence_count = 0
             self.total_samples = 0
 
-    def _bucket_age(self, age: Optional[Any]) -> Optional[str]:
+    def _bucket_age(self, age: Any | None) -> str | None:
         if age is None:
             return None
         try:
@@ -200,7 +194,7 @@ class FairnessTracker:
             return group.get("label")
         return None
 
-    def _normalize_gender(self, gender: Optional[Any]) -> Optional[str]:
+    def _normalize_gender(self, gender: Any | None) -> str | None:
         if not gender:
             return None
         text = str(gender).strip().lower()
@@ -212,7 +206,7 @@ class FairnessTracker:
             return "other"
         return None
 
-    def _normalize_language(self, language: Optional[Any]) -> Optional[str]:
+    def _normalize_language(self, language: Any | None) -> str | None:
         if not language:
             return None
         text = str(language).strip().lower()
@@ -222,19 +216,15 @@ class FairnessTracker:
         return self._language_groups.get(code)
 
     @staticmethod
-    def _parity_gap(values: Dict[str, Optional[float]]) -> Tuple[Optional[float], bool]:
+    def _parity_gap(values: dict[str, float | None]) -> tuple[float | None, bool]:
         valid_values = [value for value in values.values() if value is not None]
         if len(valid_values) < 2:
             return None, False
         return max(valid_values) - min(valid_values), True
 
-    def _build_dimension_metrics(self, stats_map: Dict[str, GroupStats]) -> Dict[str, Any]:
-        accuracy_by_group = {
-            group: stats.accuracy() for group, stats in stats_map.items()
-        }
-        confidence_by_group = {
-            group: stats.avg_confidence() for group, stats in stats_map.items()
-        }
+    def _build_dimension_metrics(self, stats_map: dict[str, GroupStats]) -> dict[str, Any]:
+        accuracy_by_group = {group: stats.accuracy() for group, stats in stats_map.items()}
+        confidence_by_group = {group: stats.avg_confidence() for group, stats in stats_map.items()}
         accuracy_gap, accuracy_sufficient = self._parity_gap(accuracy_by_group)
         confidence_gap, confidence_sufficient = self._parity_gap(confidence_by_group)
 
@@ -249,7 +239,7 @@ class FairnessTracker:
     def _build_fairness_status(
         self,
         parity_score: float,
-        data_sufficiency: Dict[str, bool],
+        data_sufficiency: dict[str, bool],
     ) -> str:
         if not all(data_sufficiency.values()):
             return "Review"

@@ -7,16 +7,15 @@ Provides local, offline speech-to-text using faster-whisper.
 Supports English (en), Hindi (hi), and Marathi (mr).
 """
 
-import os
 import logging
+import os
 import re
-import time
 import shutil
 import tempfile
+import time
 from functools import lru_cache
 
 from config import (
-    ENABLE_LOCAL_STT,
     STT_COMPUTE,
     STT_CPU_THREADS,
     STT_DEVICE,
@@ -74,6 +73,7 @@ def _prepare_audio_for_local_stt(audio_path: str):
     logger.info("[LOCAL STT] Audio format detected: %s, size=%d bytes", detected_format, file_size)
     return prepared.name, detected_format
 
+
 # Common transcription corrections for Marathi and Hindi
 TRANSCRIPTION_CORRECTIONS = {
     'mr': {
@@ -114,8 +114,9 @@ TRANSCRIPTION_CORRECTIONS = {
         'फूल': ['फुल', 'फूल'],
         'रही': ['रहि', 'रही'],
         'दिल': ['दील', 'देल', 'दिल'],
-    }
+    },
 }
+
 
 def improve_transcription(text, language_code="en"):
     """
@@ -124,41 +125,50 @@ def improve_transcription(text, language_code="en"):
     """
     if language_code not in TRANSCRIPTION_CORRECTIONS:
         return text
-    
+
     corrections = TRANSCRIPTION_CORRECTIONS[language_code]
     improved_text = text
-    
+
     # Apply corrections
     for correct_word, variations in corrections.items():
         for variation in variations:
             # Case-insensitive replacement
             pattern = r'\b' + re.escape(variation) + r'\b'
             improved_text = re.sub(pattern, correct_word, improved_text, flags=re.IGNORECASE)
-    
+
     # Additional cleanup for better medical context
     if language_code == 'mr':
         # Fix common medical term misunderstandings
-        improved_text = re.sub(r'\b(माला|मला)\s+(काय|काई)\s+(जाले|झाले)\b', 
-                              'मला काय झाले', improved_text, flags=re.IGNORECASE)
-        improved_text = re.sub(r'\b(बगुन|आज)\s+(माला|मला)\b', 
-                              'आज मला', improved_text, flags=re.IGNORECASE)
-        
+        improved_text = re.sub(
+            r'\b(माला|मला)\s+(काय|काई)\s+(जाले|झाले)\b', 'मला काय झाले', improved_text, flags=re.IGNORECASE
+        )
+        improved_text = re.sub(r'\b(बगुन|आज)\s+(माला|मला)\b', 'आज मला', improved_text, flags=re.IGNORECASE)
+
         # Fix common misinterpretations where English words creep in
         improved_text = re.sub(r'\bThe patient may mention\b.*?symptoms\.?\s*', '', improved_text, flags=re.IGNORECASE)
-        improved_text = re.sub(r'\bbody parts,?\s*pain,?\s*medical conditions,?\s*and symptoms\.?\s*', '', improved_text, flags=re.IGNORECASE)
-        
+        improved_text = re.sub(
+            r'\bbody parts,?\s*pain,?\s*medical conditions,?\s*and symptoms\.?\s*',
+            '',
+            improved_text,
+            flags=re.IGNORECASE,
+        )
+
     elif language_code == 'hi':
         # Fix common medical term misunderstandings for Hindi
-        improved_text = re.sub(r'\b(मुझे|मुझको)\s+(क्या|क्यां)\s+(हुआ|हुवा)\b', 
-                              'मुझे क्या हुआ', improved_text, flags=re.IGNORECASE)
-        improved_text = re.sub(r'\b(आज|आजं)\s+(मुझे|मुझको)\b', 
-                              'आज मुझे', improved_text, flags=re.IGNORECASE)
-        
+        improved_text = re.sub(r'\b(मुझे|मुझको)\s+(क्या|क्यां)\s+(हुआ|हुवा)\b', 'मुझे क्या हुआ', improved_text, flags=re.IGNORECASE)
+        improved_text = re.sub(r'\b(आज|आजं)\s+(मुझे|मुझको)\b', 'आज मुझे', improved_text, flags=re.IGNORECASE)
+
         # Fix common misinterpretations where English words creep in
         improved_text = re.sub(r'\bThe patient may mention\b.*?symptoms\.?\s*', '', improved_text, flags=re.IGNORECASE)
-        improved_text = re.sub(r'\bbody parts,?\s*pain,?\s*medical conditions,?\s*and symptoms\.?\s*', '', improved_text, flags=re.IGNORECASE)
-    
+        improved_text = re.sub(
+            r'\bbody parts,?\s*pain,?\s*medical conditions,?\s*and symptoms\.?\s*',
+            '',
+            improved_text,
+            flags=re.IGNORECASE,
+        )
+
     return improved_text
+
 
 def _build_stt_prompt(language_code: str) -> str:
     """Provides medical context to Whisper to improve clinical transcription."""
@@ -193,7 +203,7 @@ def _get_local_stt_model():
     try:
         from faster_whisper import WhisperModel
     except Exception as import_error:
-        raise RuntimeError(f"faster-whisper not available: {import_error}")
+        raise RuntimeError(f"faster-whisper not available: {import_error}") from import_error
 
     model_id = _LOCAL_STT_MODEL_PATH or LOCAL_STT_MODEL_SIZE
     kwargs = {
@@ -245,9 +255,12 @@ def _transcribe_with_local_whisper(audio_path: str, language_code: str):
             detected_format = _detect_audio_format(audio_path)
             with open(audio_path, "rb") as audio_file:
                 first_bytes = audio_file.read(16).hex()
-        except Exception:
-            pass
-        return None, f"Local STT failed after {elapsed:.2f}s: {error} | format={detected_format} | first_bytes={first_bytes}"
+        except OSError:
+            first_bytes = "unreadable"
+        return (
+            None,
+            f"Local STT failed after {elapsed:.2f}s: {error} | format={detected_format} | first_bytes={first_bytes}",
+        )
     finally:
         if prepared_audio_path and os.path.exists(prepared_audio_path):
             try:
@@ -283,6 +296,7 @@ def transcribe_audio(audio_path, language_code="en"):
 
 if __name__ == "__main__":
     import sys
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     audio_filepath = sys.argv[1] if len(sys.argv) > 1 else "patient_voice_test_for_patient.wav"
     result = transcribe_audio_offline(audio_filepath)

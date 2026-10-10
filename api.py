@@ -4,22 +4,23 @@ All clinical inference runs locally via Ollama (Gemma 4 gemma4:e2b).
 No patient data is transmitted to external servers.
 """
 
-from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException, Request
+import json
+import logging
+import os
+import re
+import tempfile
+import time
+import uuid
+from contextlib import asynccontextmanager
+from typing import Any
+
+import requests
+import uvicorn
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any, Tuple
-import logging
-import uvicorn
-import os
-import time
-import uuid
-import json
-import requests
-import re
-import tempfile
-from contextlib import asynccontextmanager
 
 # config loads .env before anything below reads the environment
 from config import (
@@ -28,6 +29,7 @@ from config import (
     AUDIO_OUTPUT_DIR,
     AUDIO_RETENTION_SECONDS,
     CORS_ALLOW_ORIGINS,
+    ENABLE_LOCAL_STT,
     ENABLE_LOCAL_TRIAGE,
     FAIRNESS_PARITY_THRESHOLD,
     FRONTEND_DIST_DIR,
@@ -41,32 +43,37 @@ from config import (
     MAX_AUDIO_UPLOAD_MB,
     MAX_REQUEST_MB,
 )
-
-# Import core AI components
-from voice_of_the_doctor import text_to_speech_for_api, get_available_voices
-from voice_of_the_patient import (
-    transcribe_audio,
-    _get_local_stt_model,
-    LOCAL_STT_MODEL_SIZE,
-    LOCAL_STT_DEVICE,
-    LOCAL_STT_COMPUTE_TYPE,
-    ENABLE_LOCAL_STT,
-)
-from doctor_search import search_doctors_enhanced as advanced_search_doctors, search_doctors_by_city as advanced_search_city
+from doctor_search import search_doctors_by_city as advanced_search_city
+from doctor_search import search_doctors_enhanced as advanced_search_doctors
 
 # Import Emergency Triage Module
 from emergency_triage import (
-    EmergencyTriageRequest, TriageResponse, HospitalSearchRequest,
-    VitalSigns, EmergencyClassifier, HospitalRoutingService,
-    TRIAGE_LEVELS, EMERGENCY_NUMBERS,
-    TOXIN_FAST_LANE_KEYWORDS
+    EMERGENCY_NUMBERS,
+    TOXIN_FAST_LANE_KEYWORDS,
+    TRIAGE_LEVELS,
+    EmergencyClassifier,
+    EmergencyTriageRequest,
+    HospitalRoutingService,
+    HospitalSearchRequest,
+    TriageResponse,
+    VitalSigns,
 )
 from emergency_triage.constants import VITAL_SIGNS_CRITICAL
+from emergency_triage.fairness_engine import FairnessTracker
 from emergency_triage.offline_triage_engine import (
     normalize_triage,
     select_offline_first_triage,
 )
-from emergency_triage.fairness_engine import FairnessTracker
+
+# Import core AI components
+from voice_of_the_doctor import get_available_voices, text_to_speech_for_api
+from voice_of_the_patient import (
+    LOCAL_STT_COMPUTE_TYPE,
+    LOCAL_STT_DEVICE,
+    LOCAL_STT_MODEL_SIZE,
+    _get_local_stt_model,
+    transcribe_audio,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -74,6 +81,7 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger("healstation")
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -99,6 +107,7 @@ async def limit_request_size(request: Request, call_next):
         return JSONResponse(status_code=413, content={"detail": f"Request body exceeds {MAX_REQUEST_MB} MB."})
     return await call_next(request)
 
+
 # CORS: only the configured UI origins may call the API from a browser.
 # A wildcard would let any website the health worker visits read patient
 # triage results from this local server. No cookies are used, so no
@@ -118,44 +127,47 @@ MAX_ATTACHMENTS = 8
 
 class ConsultationRequest(BaseModel):
     patient_text: str = Field(..., min_length=1, max_length=MAX_TEXT_CHARS)
-    typed_text: Optional[str] = Field(None, max_length=MAX_TEXT_CHARS)
-    transcription_text: Optional[str] = Field(None, max_length=MAX_TEXT_CHARS)
+    typed_text: str | None = Field(None, max_length=MAX_TEXT_CHARS)
+    transcription_text: str | None = Field(None, max_length=MAX_TEXT_CHARS)
     language: str = Field("en", max_length=16)
-    age: Optional[int] = Field(None, ge=0, le=130)
-    gender: Optional[str] = Field(None, max_length=32)
-    triage_correct: Optional[bool] = None
-    image_data: Optional[List[str]] = Field(None, max_length=MAX_ATTACHMENTS)
-    pdf_data: Optional[List[dict]] = Field(None, max_length=MAX_ATTACHMENTS)
-    image_count: Optional[int] = 0
-    pdf_count: Optional[int] = 0
+    age: int | None = Field(None, ge=0, le=130)
+    gender: str | None = Field(None, max_length=32)
+    triage_correct: bool | None = None
+    image_data: list[str] | None = Field(None, max_length=MAX_ATTACHMENTS)
+    pdf_data: list[dict] | None = Field(None, max_length=MAX_ATTACHMENTS)
+    image_count: int | None = 0
+    pdf_count: int | None = 0
     # Structured vital signs (optional — UI can send individual fields).
     # Bounds only reject impossible values; critical readings stay accepted.
-    heart_rate: Optional[int] = Field(None, ge=0, le=400)
-    bp_systolic: Optional[int] = Field(None, ge=0, le=400)
-    bp_diastolic: Optional[int] = Field(None, ge=0, le=300)
-    spo2: Optional[int] = Field(None, ge=0, le=100)
-    temperature: Optional[float] = Field(None, ge=20, le=46)
+    heart_rate: int | None = Field(None, ge=0, le=400)
+    bp_systolic: int | None = Field(None, ge=0, le=400)
+    bp_diastolic: int | None = Field(None, ge=0, le=300)
+    spo2: int | None = Field(None, ge=0, le=100)
+    temperature: float | None = Field(None, ge=20, le=46)
+
 
 class ConsultationResponse(BaseModel):
     doctor_response: str
-    audio_url: Optional[str] = None
-    specialist_recommendation: Optional[str] = None
-    urgency_level: Optional[str] = None
+    audio_url: str | None = None
+    specialist_recommendation: str | None = None
+    urgency_level: str | None = None
     # Canonical triage schema (Step 1)
     urgency: str = "low"
-    reasons: List[str] = Field(default_factory=list)
-    actions: List[str] = Field(default_factory=list)
+    reasons: list[str] = Field(default_factory=list)
+    actions: list[str] = Field(default_factory=list)
     specialist: str = "general"
     confidence: float = 0.5
-    triage: Dict[str, Any] = Field(default_factory=dict)
-    triage_source: Optional[str] = None
-    emergency_action_block: Optional[Dict[str, Any]] = None
-    consensus_explanation: Optional[Dict[str, Any]] = None
-    fairness_metrics: Optional[Dict[str, Any]] = None
+    triage: dict[str, Any] = Field(default_factory=dict)
+    triage_source: str | None = None
+    emergency_action_block: dict[str, Any] | None = None
+    consensus_explanation: dict[str, Any] | None = None
+    fairness_metrics: dict[str, Any] | None = None
+
 
 class TranscriptionResponse(BaseModel):
     text: str
     language: str
+
 
 class DoctorSearchRequest(BaseModel):
     latitude: float
@@ -166,10 +178,12 @@ class DoctorSearchRequest(BaseModel):
     limit: int = 20
     language: str = "en"
 
+
 class DoctorSearchResponse(BaseModel):
-    doctors: List[Dict[str, Any]]
+    doctors: list[dict[str, Any]]
     total_found: int
-    search_params: Dict[str, Any]
+    search_params: dict[str, Any]
+
 
 class CitySearchRequest(BaseModel):
     city: str
@@ -177,14 +191,15 @@ class CitySearchRequest(BaseModel):
     sort_by: str = "distance"
     limit: int = 20
     language: str = "en"
-    user_latitude: Optional[float] = None  # Optional user location for distance calculation
-    user_longitude: Optional[float] = None
+    user_latitude: float | None = None  # Optional user location for distance calculation
+    user_longitude: float | None = None
+
 
 class CitySearchResponse(BaseModel):
-    doctors: List[Dict[str, Any]]
+    doctors: list[dict[str, Any]]
     total_found: int
-    city_coordinates: Optional[Dict[str, float]]
-    search_params: Dict[str, Any]
+    city_coordinates: dict[str, float] | None
+    search_params: dict[str, Any]
 
 
 # Accept a legacy /api/generate URL from older .env files; triage uses /api/chat.
@@ -192,7 +207,7 @@ LOCAL_GEMMA_CHAT_URL = LOCAL_GEMMA_URL.replace("/api/generate", "/api/chat")
 fairness_tracker = FairnessTracker(parity_threshold=FAIRNESS_PARITY_THRESHOLD)
 
 
-def _extract_json_payload(text: str) -> Optional[Dict[str, Any]]:
+def _extract_json_payload(text: str) -> dict[str, Any] | None:
     """Extract first JSON object from model text output."""
     if not text:
         return None
@@ -209,7 +224,7 @@ def _extract_json_payload(text: str) -> Optional[Dict[str, Any]]:
     if start == -1 or end == -1 or end <= start:
         return None
 
-    candidate = text[start:end + 1]
+    candidate = text[start : end + 1]
     try:
         parsed = json.loads(candidate)
         return _normalize_local_gemma_payload(parsed) if isinstance(parsed, dict) else None
@@ -217,7 +232,7 @@ def _extract_json_payload(text: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _normalize_local_gemma_urgency(value: Any) -> Optional[str]:
+def _normalize_local_gemma_urgency(value: Any) -> str | None:
     """Map the model's urgency label to low/medium/high.
 
     Unrecognised labels return None so the payload fails validation and the
@@ -241,12 +256,12 @@ def _normalize_local_gemma_urgency(value: Any) -> Optional[str]:
     return mapping.get(text)
 
 
-def _normalize_local_gemma_list(value: Any) -> List[str]:
+def _normalize_local_gemma_list(value: Any) -> list[str]:
     if value is None:
         return []
 
     items = value if isinstance(value, list) else [value]
-    normalized: List[str] = []
+    normalized: list[str] = []
     for item in items:
         text = str(item).strip()
         if text:
@@ -267,7 +282,7 @@ def _normalize_local_gemma_confidence(value: Any) -> float:
     return confidence
 
 
-def _normalize_local_gemma_payload(payload: Any) -> Optional[Dict[str, Any]]:
+def _normalize_local_gemma_payload(payload: Any) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
 
@@ -279,9 +294,9 @@ def _normalize_local_gemma_payload(payload: Any) -> Optional[Dict[str, Any]]:
     return normalized
 
 
-def _parse_vital_signs_from_text(text: str) -> Dict[str, Optional[float]]:
+def _parse_vital_signs_from_text(text: str) -> dict[str, float | None]:
     """Extract structured vital signs from patient text if frontend appended them as a string."""
-    vitals: Dict[str, Optional[float]] = {
+    vitals: dict[str, float | None] = {
         "heart_rate": None,
         "bp_systolic": None,
         "bp_diastolic": None,
@@ -327,25 +342,51 @@ def _parse_vital_signs_from_text(text: str) -> Dict[str, Optional[float]]:
 
 
 def _format_vitals_for_prompt(
-    heart_rate: Optional[int] = None,
-    bp_systolic: Optional[int] = None,
-    bp_diastolic: Optional[int] = None,
-    spo2: Optional[int] = None,
-    temperature: Optional[float] = None,
+    heart_rate: int | None = None,
+    bp_systolic: int | None = None,
+    bp_diastolic: int | None = None,
+    spo2: int | None = None,
+    temperature: float | None = None,
 ) -> str:
     """Format structured vital signs into a clinical string for Gemma's prompt."""
     parts = []
     if heart_rate is not None:
-        flag = " (CRITICAL HIGH)" if heart_rate > 150 else " (CRITICAL LOW)" if heart_rate < 40 else " (HIGH)" if heart_rate > 100 else " (LOW)" if heart_rate < 60 else ""
+        flag = (
+            " (CRITICAL HIGH)"
+            if heart_rate > 150
+            else " (CRITICAL LOW)"
+            if heart_rate < 40
+            else " (HIGH)"
+            if heart_rate > 100
+            else " (LOW)"
+            if heart_rate < 60
+            else ""
+        )
         parts.append(f"Heart Rate: {heart_rate} BPM{flag}")
     if bp_systolic is not None and bp_diastolic is not None:
-        flag = " (HYPERTENSIVE CRISIS)" if bp_systolic >= 180 else " (HIGH)" if bp_systolic >= 140 else " (LOW)" if bp_systolic < 90 else ""
+        flag = (
+            " (HYPERTENSIVE CRISIS)"
+            if bp_systolic >= 180
+            else " (HIGH)"
+            if bp_systolic >= 140
+            else " (LOW)"
+            if bp_systolic < 90
+            else ""
+        )
         parts.append(f"Blood Pressure: {bp_systolic}/{bp_diastolic} mmHg{flag}")
     if spo2 is not None:
         flag = " (CRITICAL LOW)" if spo2 < 88 else " (LOW)" if spo2 < 92 else ""
         parts.append(f"SpO2: {spo2}%{flag}")
     if temperature is not None:
-        flag = " (HIGH FEVER)" if temperature >= 39.5 else " (FEVER)" if temperature >= 38 else " (LOW)" if temperature < 36 else ""
+        flag = (
+            " (HIGH FEVER)"
+            if temperature >= 39.5
+            else " (FEVER)"
+            if temperature >= 38
+            else " (LOW)"
+            if temperature < 36
+            else ""
+        )
         parts.append(f"Temperature: {temperature}°C{flag}")
     return ", ".join(parts) if parts else ""
 
@@ -389,11 +430,11 @@ _GEMMA_SYSTEM_PROMPT = (
 def _build_local_gemma_prompt(
     patient_text: str,
     language: str,
-    heart_rate: Optional[int] = None,
-    bp_systolic: Optional[int] = None,
-    bp_diastolic: Optional[int] = None,
-    spo2: Optional[int] = None,
-    temperature: Optional[float] = None,
+    heart_rate: int | None = None,
+    bp_systolic: int | None = None,
+    bp_diastolic: int | None = None,
+    spo2: int | None = None,
+    temperature: float | None = None,
 ) -> str:
     language = _normalize_language(language)
     vitals_str = _format_vitals_for_prompt(heart_rate, bp_systolic, bp_diastolic, spo2, temperature)
@@ -414,20 +455,24 @@ def _build_local_gemma_prompt(
 def _run_local_gemma_triage(
     patient_text: str,
     language: str,
-    heart_rate: Optional[int] = None,
-    bp_systolic: Optional[int] = None,
-    bp_diastolic: Optional[int] = None,
-    spo2: Optional[int] = None,
-    temperature: Optional[float] = None,
-) -> Optional[Dict[str, Any]]:
+    heart_rate: int | None = None,
+    bp_systolic: int | None = None,
+    bp_diastolic: int | None = None,
+    spo2: int | None = None,
+    temperature: float | None = None,
+) -> dict[str, Any] | None:
     """Try local Gemma via Ollama /api/chat (instruction-tuned endpoint)."""
     if not ENABLE_LOCAL_TRIAGE:
         return None
     try:
         user_message = _build_local_gemma_prompt(
-            patient_text, language,
-            heart_rate=heart_rate, bp_systolic=bp_systolic,
-            bp_diastolic=bp_diastolic, spo2=spo2, temperature=temperature,
+            patient_text,
+            language,
+            heart_rate=heart_rate,
+            bp_systolic=bp_systolic,
+            bp_diastolic=bp_diastolic,
+            spo2=spo2,
+            temperature=temperature,
         )
         # Use /api/chat — required for instruction-tuned models like gemma4:e2b
         chat_url = LOCAL_GEMMA_CHAT_URL
@@ -442,7 +487,7 @@ def _run_local_gemma_triage(
                 "temperature": 0.15,
                 "num_ctx": LOCAL_GEMMA_NUM_CTX,
                 "num_predict": LOCAL_GEMMA_NUM_PREDICT,
-            }
+            },
         }
         logger.info("Calling Ollama model=%s num_ctx=%d", LOCAL_GEMMA_MODEL, LOCAL_GEMMA_NUM_CTX)
         response = requests.post(chat_url, json=payload, timeout=LOCAL_GEMMA_TIMEOUT_SECONDS)
@@ -458,7 +503,9 @@ def _run_local_gemma_triage(
         logger.debug("Model output received (%d chars)", len(model_text))
         parsed = _extract_json_payload(model_text)
         if parsed:
-            logger.info("Model triage parsed: urgency=%s specialist=%s", parsed.get("urgency"), parsed.get("specialist"))
+            logger.info(
+                "Model triage parsed: urgency=%s specialist=%s", parsed.get("urgency"), parsed.get("specialist")
+            )
         else:
             logger.warning("Could not parse JSON from model output")
         return parsed
@@ -467,7 +514,7 @@ def _run_local_gemma_triage(
         return None
 
 
-def _clamp_vital(value: Optional[float], low: float, high: float, as_int: bool = True):
+def _clamp_vital(value: float | None, low: float, high: float, as_int: bool = True):
     if value is None:
         return None
     clamped = min(max(value, low), high)
@@ -477,14 +524,14 @@ def _clamp_vital(value: Optional[float], low: float, high: float, as_int: bool =
 def _build_emergency_fallback_triage(
     patient_text: str,
     language: str,
-    age: Optional[int] = None,
-    gender: Optional[str] = None,
-    heart_rate: Optional[int] = None,
-    bp_systolic: Optional[int] = None,
-    bp_diastolic: Optional[int] = None,
-    spo2: Optional[int] = None,
-    temperature: Optional[float] = None,
-) -> Optional[Dict[str, Any]]:
+    age: int | None = None,
+    gender: str | None = None,
+    heart_rate: int | None = None,
+    bp_systolic: int | None = None,
+    bp_diastolic: int | None = None,
+    spo2: int | None = None,
+    temperature: float | None = None,
+) -> dict[str, Any] | None:
     """Reuse existing emergency classifier as strict fallback path."""
     try:
         # Build VitalSigns object only if any value was provided. Values are
@@ -527,7 +574,6 @@ def _build_emergency_fallback_triage(
             "urgency": urgency_raw,
             "reasons": reasons,
             "actions": actions,
-
             "specialist": triage_result.specialist_recommendation or "general",
             "confidence": triage_result.confidence,
             "doctor_response": triage_result.preliminary_assessment,
@@ -559,40 +605,41 @@ _ASSESSMENT_FAILED_MESSAGES = {
 }
 
 
-def _localized_message(messages: Dict[str, str], language: Optional[str]) -> str:
+def _localized_message(messages: dict[str, str], language: str | None) -> str:
     return messages.get(_normalize_language(language), messages["en"])
 
 
-def _compose_doctor_response_from_triage(triage_data: Dict[str, Any]) -> str:
+def _compose_doctor_response_from_triage(triage_data: dict[str, Any]) -> str:
     urgency = triage_data.get('urgency', 'low').upper()
     reasons = triage_data.get("reasons", [])
     actions = triage_data.get("actions", [])
-    
+
     response = f"Based on your symptoms, I have assessed this as a {urgency} urgency situation. "
-    
+
     if reasons:
         response += f"Key findings include: {'; '.join(reasons[:3])}. "
-    
+
     if actions:
         response += f"I recommend the following immediate actions: {'; '.join(actions[:3])}. "
-    
+
     response += "Please monitor your symptoms closely. If you experience worsening pain, difficulty breathing, or any other red flags, seek emergency medical attention immediately."
-    
+
     return response
 
 
 def _build_consensus_explanation(
-    patient_text: Optional[str],
-    typed_text: Optional[str],
-    transcription_text: Optional[str],
-    image_data: Optional[List[str]],
-    pdf_data: Optional[List[dict]],
+    patient_text: str | None,
+    typed_text: str | None,
+    transcription_text: str | None,
+    image_data: list[str] | None,
+    pdf_data: list[dict] | None,
     final_urgency: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Build a simple multi-input consensus summary for explainability.
     """
-    def _norm(text: Optional[str]) -> str:
+
+    def _norm(text: str | None) -> str:
         return str(text or "").strip().lower()
 
     def _high_risk(text: str) -> bool:
@@ -646,7 +693,7 @@ def _build_consensus_explanation(
     }
 
 
-def _normalize_language(language: Optional[str]) -> str:
+def _normalize_language(language: str | None) -> str:
     raw = str(language or "en").strip().lower()
     if "-" in raw:
         raw = raw.split("-", 1)[0]
@@ -654,7 +701,7 @@ def _normalize_language(language: Optional[str]) -> str:
 
 
 def _contains_devanagari(text: str) -> bool:
-    return any("\u0900" <= char <= "\u097F" for char in text)
+    return any("\u0900" <= char <= "\u097f" for char in text)
 
 
 def _enforce_doctor_response_language(doctor_response: str, language: str) -> str:
@@ -717,7 +764,7 @@ _GUARDRAIL_CATEGORY_LABELS = {
 }
 
 
-def _localize_guardrail_categories(categories: List[str], language: str) -> str:
+def _localize_guardrail_categories(categories: list[str], language: str) -> str:
     mapping = _GUARDRAIL_CATEGORY_LABELS.get(language, _GUARDRAIL_CATEGORY_LABELS["en"])
     localized = [mapping.get(category, category.replace("_", " ")) for category in categories]
     return ", ".join(localized) if localized else ""
@@ -748,13 +795,13 @@ _TOXIN_CATEGORY_LABELS = {
 }
 
 
-def _localize_toxin_categories(categories: List[str], language: str) -> str:
+def _localize_toxin_categories(categories: list[str], language: str) -> str:
     mapping = _TOXIN_CATEGORY_LABELS.get(language, _TOXIN_CATEGORY_LABELS["en"])
     localized = [mapping.get(cat, cat.replace("_", " ")) for cat in categories]
     return ", ".join(localized) if localized else ""
 
 
-def _localize_guardrail_reasons(red_flag: Dict[str, Any], language: str) -> List[str]:
+def _localize_guardrail_reasons(red_flag: dict[str, Any], language: str) -> list[str]:
     reasons = []
     cat_text = _localize_guardrail_categories(red_flag.get("matched_categories", []), language)
     if cat_text:
@@ -775,7 +822,7 @@ def _localize_guardrail_reasons(red_flag: Dict[str, Any], language: str) -> List
     return reasons
 
 
-def _localize_toxin_reasons(toxin_flag: Dict[str, Any], language: str) -> List[str]:
+def _localize_toxin_reasons(toxin_flag: dict[str, Any], language: str) -> list[str]:
     reasons = []
     cat_text = _localize_toxin_categories(toxin_flag.get("matched_categories", []), language)
     if cat_text:
@@ -801,131 +848,319 @@ def _localize_toxin_reasons(toxin_flag: Dict[str, Any], language: str) -> List[s
 # model so an unavailable or wrong model can never downgrade these cases.
 # Latin-script phrases match on word boundaries; Devanagari phrases match as
 # substrings (Hindi/Marathi inflect by suffix, e.g. छाती → छातीत).
-_RED_FLAG_KEYWORDS: Dict[str, List[str]] = {
+_RED_FLAG_KEYWORDS: dict[str, list[str]] = {
     "cardiac": [
-        "heart attack", "chest pain", "chest tightness", "chest pressure", "chest heaviness",
-        "crushing chest", "pain radiating to arm", "radiating to left arm", "radiating to jaw",
-        "left arm pain", "arm pain with chest", "jaw pain with chest", "sweating with chest pain",
+        "heart attack",
+        "chest pain",
+        "chest tightness",
+        "chest pressure",
+        "chest heaviness",
+        "crushing chest",
+        "pain radiating to arm",
+        "radiating to left arm",
+        "radiating to jaw",
+        "left arm pain",
+        "arm pain with chest",
+        "jaw pain with chest",
+        "sweating with chest pain",
         # Hindi
-        "दिल का दौरा", "हार्ट अटैक", "सीने में दर्द", "सीने में दबाव", "सीने में जकड़न",
-        "सीने में भारीपन", "छाती में दर्द", "दिल में दर्द", "बाएं हाथ में दर्द",
+        "दिल का दौरा",
+        "हार्ट अटैक",
+        "सीने में दर्द",
+        "सीने में दबाव",
+        "सीने में जकड़न",
+        "सीने में भारीपन",
+        "छाती में दर्द",
+        "दिल में दर्द",
+        "बाएं हाथ में दर्द",
         # Marathi
-        "हृदयविकाराचा झटका", "हार्ट अटॅक", "छातीत दुखणे", "छातीत दुखत", "छातीत दडपण",
-        "छातीवर दडपण", "छातीत घट्टपणा", "छातीत जडपणा", "छातीत वेदना", "हृदयात वेदना",
+        "हृदयविकाराचा झटका",
+        "हार्ट अटॅक",
+        "छातीत दुखणे",
+        "छातीत दुखत",
+        "छातीत दडपण",
+        "छातीवर दडपण",
+        "छातीत घट्टपणा",
+        "छातीत जडपणा",
+        "छातीत वेदना",
+        "हृदयात वेदना",
         "डाव्या हातात वेदना",
     ],
     "stroke": [
-        "stroke", "tia", "brain attack", "face droop", "face drooping", "facial droop",
-        "facial drooping", "slurred speech", "speech is slurred", "sudden confusion",
-        "trouble speaking", "can't speak", "cannot speak", "weakness on one side",
-        "weakness one side", "one side weak", "one sided weakness", "one-sided weakness",
-        "numbness on one side", "sudden numbness", "can't lift my arm", "can't lift my left arm",
-        "can't lift my right arm", "paralysis", "paralyzed", "sudden vision loss",
+        "stroke",
+        "tia",
+        "brain attack",
+        "face droop",
+        "face drooping",
+        "facial droop",
+        "facial drooping",
+        "slurred speech",
+        "speech is slurred",
+        "sudden confusion",
+        "trouble speaking",
+        "can't speak",
+        "cannot speak",
+        "weakness on one side",
+        "weakness one side",
+        "one side weak",
+        "one sided weakness",
+        "one-sided weakness",
+        "numbness on one side",
+        "sudden numbness",
+        "can't lift my arm",
+        "can't lift my left arm",
+        "can't lift my right arm",
+        "paralysis",
+        "paralyzed",
+        "sudden vision loss",
         "worst headache of my life",
         # Hindi
-        "लकवा", "चेहरा टेढ़ा", "चेहरा लटक", "बोली अस्पष्ट", "लड़खड़ाती बोली",
-        "बोल नहीं पा रहा", "बोल नहीं पा रही", "एक तरफ कमजोरी", "हाथ ऊपर नहीं उठ",
+        "लकवा",
+        "चेहरा टेढ़ा",
+        "चेहरा लटक",
+        "बोली अस्पष्ट",
+        "लड़खड़ाती बोली",
+        "बोल नहीं पा रहा",
+        "बोल नहीं पा रही",
+        "एक तरफ कमजोरी",
+        "हाथ ऊपर नहीं उठ",
         # Marathi
-        "अर्धांगवायू", "चेहरा वाकडा", "चेहरा लटक", "अस्पष्ट बोलणे", "बोलता येत नाही",
-        "एक बाजू कमजोर", "हात वर उचलता येत नाही",
+        "अर्धांगवायू",
+        "चेहरा वाकडा",
+        "चेहरा लटक",
+        "अस्पष्ट बोलणे",
+        "बोलता येत नाही",
+        "एक बाजू कमजोर",
+        "हात वर उचलता येत नाही",
     ],
     "breathing_distress": [
-        "can't breathe", "cannot breathe", "can not breathe", "unable to breathe",
-        "difficulty breathing", "trouble breathing", "struggling to breathe", "hard to breathe",
-        "shortness of breath", "short of breath", "breathless", "breathlessness", "gasping",
-        "choking", "suffocating", "blue lips", "turning blue", "respiratory distress",
-        "not breathing", "stopped breathing",
+        "can't breathe",
+        "cannot breathe",
+        "can not breathe",
+        "unable to breathe",
+        "difficulty breathing",
+        "trouble breathing",
+        "struggling to breathe",
+        "hard to breathe",
+        "shortness of breath",
+        "short of breath",
+        "breathless",
+        "breathlessness",
+        "gasping",
+        "choking",
+        "suffocating",
+        "blue lips",
+        "turning blue",
+        "respiratory distress",
+        "not breathing",
+        "stopped breathing",
         # Hindi
-        "सांस नहीं ले पा", "सांस लेने में तकलीफ", "सांस लेने में दिक्कत", "सांस फूल",
-        "सांस की कमी", "दम घुट", "सांस रुक", "सांस बंद",
+        "सांस नहीं ले पा",
+        "सांस लेने में तकलीफ",
+        "सांस लेने में दिक्कत",
+        "सांस फूल",
+        "सांस की कमी",
+        "दम घुट",
+        "सांस रुक",
+        "सांस बंद",
         # Marathi
-        "श्वास घेता येत नाही", "श्वास घेण्यास त्रास", "श्वास घेण्यास अडचण", "श्वास कोंड",
-        "दम लागत", "श्वास बंद",
+        "श्वास घेता येत नाही",
+        "श्वास घेण्यास त्रास",
+        "श्वास घेण्यास अडचण",
+        "श्वास कोंड",
+        "दम लागत",
+        "श्वास बंद",
     ],
     "severe_bleeding": [
-        "severe bleeding", "heavy bleeding", "bleeding heavily", "bleeding profusely",
-        "won't stop bleeding", "wont stop bleeding", "bleeding won't stop", "bleeding wont stop",
-        "massive blood loss", "hemorrhage", "haemorrhage", "vomiting blood", "coughing blood",
-        "coughing up blood", "soaked in blood",
+        "severe bleeding",
+        "heavy bleeding",
+        "bleeding heavily",
+        "bleeding profusely",
+        "won't stop bleeding",
+        "wont stop bleeding",
+        "bleeding won't stop",
+        "bleeding wont stop",
+        "massive blood loss",
+        "hemorrhage",
+        "haemorrhage",
+        "vomiting blood",
+        "coughing blood",
+        "coughing up blood",
+        "soaked in blood",
         # Hindi
-        "खून नहीं रुक रहा", "खून बंद नहीं", "बहुत खून", "अत्यधिक रक्तस्राव", "खून की उल्टी",
+        "खून नहीं रुक रहा",
+        "खून बंद नहीं",
+        "बहुत खून",
+        "अत्यधिक रक्तस्राव",
+        "खून की उल्टी",
         "रक्तस्राव",
         # Marathi
-        "खून थांबत नाही", "रक्त थांबत नाही", "खूप रक्त", "तीव्र रक्तस्राव", "रक्ताची उलटी",
+        "खून थांबत नाही",
+        "रक्त थांबत नाही",
+        "खूप रक्त",
+        "तीव्र रक्तस्राव",
+        "रक्ताची उलटी",
     ],
     "trauma": [
-        "car accident", "road accident", "bike accident", "motorcycle accident",
-        "hit by a car", "hit by a vehicle", "major fall", "fall from height", "fell from height",
-        "head injury", "gunshot", "stab wound", "stabbed", "electrocuted", "electric shock",
+        "car accident",
+        "road accident",
+        "bike accident",
+        "motorcycle accident",
+        "hit by a car",
+        "hit by a vehicle",
+        "major fall",
+        "fall from height",
+        "fell from height",
+        "head injury",
+        "gunshot",
+        "stab wound",
+        "stabbed",
+        "electrocuted",
+        "electric shock",
         # Hindi
-        "गंभीर चोट", "सड़क दुर्घटना", "कार एक्सीडेंट", "बाइक एक्सीडेंट", "गाड़ी दुर्घटना",
-        "सिर में चोट", "ऊंचाई से गिर", "ऊँचाई से गिर", "करंट लग",
+        "गंभीर चोट",
+        "सड़क दुर्घटना",
+        "कार एक्सीडेंट",
+        "बाइक एक्सीडेंट",
+        "गाड़ी दुर्घटना",
+        "सिर में चोट",
+        "ऊंचाई से गिर",
+        "ऊँचाई से गिर",
+        "करंट लग",
         # Marathi
-        "गंभीर दुखापत", "रस्ता अपघात", "कार अपघात", "गाडी अपघात", "मोटरसायकल अपघात",
-        "डोक्याला मार", "उंचीवरून पड", "शॉक लाग",
+        "गंभीर दुखापत",
+        "रस्ता अपघात",
+        "कार अपघात",
+        "गाडी अपघात",
+        "मोटरसायकल अपघात",
+        "डोक्याला मार",
+        "उंचीवरून पड",
+        "शॉक लाग",
     ],
     "unconscious": [
-        "unconscious", "unresponsive", "not responding", "won't wake up", "wont wake up",
+        "unconscious",
+        "unresponsive",
+        "not responding",
+        "won't wake up",
+        "wont wake up",
         "collapsed",
         # Hindi
-        "बेहोश", "होश नहीं",
+        "बेहोश",
+        "होश नहीं",
         # Marathi
-        "बेशुद्ध", "शुद्ध हरपली",
+        "बेशुद्ध",
+        "शुद्ध हरपली",
     ],
     "seizure": [
-        "seizure", "seizures", "convulsion", "convulsions", "convulsing",
+        "seizure",
+        "seizures",
+        "convulsion",
+        "convulsions",
+        "convulsing",
         # Hindi
-        "मिर्गी", "झटके आ",
+        "मिर्गी",
+        "झटके आ",
         # Marathi
-        "फेफरे", "झटके येत", "फिट आली",
+        "फेफरे",
+        "झटके येत",
+        "फिट आली",
     ],
     "anaphylaxis": [
-        "anaphylaxis", "anaphylactic", "throat closing", "throat is closing", "throat swelling",
-        "tongue swelling", "severe allergic reaction",
+        "anaphylaxis",
+        "anaphylactic",
+        "throat closing",
+        "throat is closing",
+        "throat swelling",
+        "tongue swelling",
+        "severe allergic reaction",
         # Hindi
         "गला बंद हो",
         # Marathi
         "घसा बंद होत",
     ],
     "self_harm": [
-        "suicide attempt", "attempted suicide", "suicidal", "kill myself", "end my life",
-        "want to die", "self harm", "self-harm", "cut myself",
+        "suicide attempt",
+        "attempted suicide",
+        "suicidal",
+        "kill myself",
+        "end my life",
+        "want to die",
+        "self harm",
+        "self-harm",
+        "cut myself",
         # Hindi
-        "आत्महत्या", "खुद को मार", "जान दे दूं",
+        "आत्महत्या",
+        "खुद को मार",
+        "जान दे दूं",
         # Marathi
-        "स्वतःला मार", "जीव द्यायचा",
+        "स्वतःला मार",
+        "जीव द्यायचा",
     ],
 }
 
 # Phrases that alone justify maximum confidence.
 _EXPLICIT_CRITICAL_KEYWORDS = {
-    "heart attack", "crushing chest", "stroke", "face droop", "face drooping", "slurred speech",
-    "can't breathe", "cannot breathe", "not breathing", "stopped breathing", "severe bleeding",
-    "won't stop bleeding", "unconscious", "unresponsive", "anaphylaxis", "suicide attempt",
-    "दिल का दौरा", "हृदयविकाराचा झटका", "बेहोश", "बेशुद्ध", "लकवा", "अर्धांगवायू",
+    "heart attack",
+    "crushing chest",
+    "stroke",
+    "face droop",
+    "face drooping",
+    "slurred speech",
+    "can't breathe",
+    "cannot breathe",
+    "not breathing",
+    "stopped breathing",
+    "severe bleeding",
+    "won't stop bleeding",
+    "unconscious",
+    "unresponsive",
+    "anaphylaxis",
+    "suicide attempt",
+    "दिल का दौरा",
+    "हृदयविकाराचा झटका",
+    "बेहोश",
+    "बेशुद्ध",
+    "लकवा",
+    "अर्धांगवायू",
 }
 
 # Separator between words that does not cross a clause boundary.
 _SEP = r"[^\w.,;:!?\n।]+"
-_RED_FLAG_PATTERNS: Dict[str, List["re.Pattern[str]"]] = {
+_RED_FLAG_PATTERNS: dict[str, list["re.Pattern[str]"]] = {
     "cardiac": [
         # "pain in my heart", "pressure on the chest"
-        re.compile(rf"\b(?:pain|ache|pressure|tightness|heaviness|discomfort)\b(?:{_SEP}\w+){{0,3}}?{_SEP}(?:heart|chest)\b"),
+        re.compile(
+            rf"\b(?:pain|ache|pressure|tightness|heaviness|discomfort)\b(?:{_SEP}\w+){{0,3}}?{_SEP}(?:heart|chest)\b"
+        ),
         # "my chest hurts", "heart is aching"
-        re.compile(rf"\b(?:heart|chest)\b(?:{_SEP}\w+){{0,2}}?{_SEP}(?:pain|pains|ache|aches|aching|pressure|tightness|heaviness|discomfort|hurts?|hurting)\b"),
+        re.compile(
+            rf"\b(?:heart|chest)\b(?:{_SEP}\w+){{0,2}}?{_SEP}(?:pain|pains|ache|aches|aching|pressure|tightness|heaviness|discomfort|hurts?|hurting)\b"
+        ),
         re.compile(r"(?:दिल|सीने|छाती|हृदय)\S*\s+(?:\S+\s+){0,2}?(?:दर्द|दबाव|जकड़न|भारीपन|वेदना|दुख|दडपण)"),
         re.compile(r"(?:दर्द|वेदना)\s+(?:\S+\s+){0,2}?(?:दिल|सीने|छाती|हृदय)"),
     ],
     "breathing_distress": [
-        re.compile(rf"\b(?:can'?t|cannot|unable to|hard to|difficult to|struggling to|trouble)\b(?:{_SEP}\w+){{0,2}}?{_SEP}(?:breathe|breathing)\b"),
+        re.compile(
+            rf"\b(?:can'?t|cannot|unable to|hard to|difficult to|struggling to|trouble)\b(?:{_SEP}\w+){{0,2}}?{_SEP}(?:breathe|breathing)\b"
+        ),
         re.compile(r"सांस\S*\s+(?:\S+\s+){0,3}?(?:तकलीफ|दिक्कत|फूल|नहीं ले|रुक)"),
         re.compile(r"श्वास\S*\s+(?:\S+\s+){0,3}?(?:त्रास|अडचण|येत नाही|कोंड|बंद)"),
     ],
 }
 
 _UNCERTAINTY_MARKERS = (
-    "maybe", "might", "not sure", "unclear", "possibly", "i think", "could be", "unsure",
-    "शायद", "पता नहीं", "कदाचित", "माहित नाही",
+    "maybe",
+    "might",
+    "not sure",
+    "unclear",
+    "possibly",
+    "i think",
+    "could be",
+    "unsure",
+    "शायद",
+    "पता नहीं",
+    "कदाचित",
+    "माहित नाही",
 )
 
 # A negation word followed by at most two words directly before the finding,
@@ -942,34 +1177,33 @@ def _keyword_regex(keyword: str) -> "re.Pattern[str]":
     return re.compile(escaped)
 
 
-_RED_FLAG_KEYWORD_REGEXES: Dict[str, List[Tuple[str, "re.Pattern[str]"]]] = {
-    category: [(kw, _keyword_regex(kw)) for kw in keywords]
-    for category, keywords in _RED_FLAG_KEYWORDS.items()
+_RED_FLAG_KEYWORD_REGEXES: dict[str, list[tuple[str, "re.Pattern[str]"]]] = {
+    category: [(kw, _keyword_regex(kw)) for kw in keywords] for category, keywords in _RED_FLAG_KEYWORDS.items()
 }
 
 
-def _normalize_symptom_text(text: Optional[str]) -> str:
+def _normalize_symptom_text(text: str | None) -> str:
     return str(text or "").lower().replace("’", "'").replace("‘", "'")
 
 
 def _is_negated(text: str, start: int) -> bool:
-    window = text[max(0, start - 40):start]
+    window = text[max(0, start - 40) : start]
     clause = re.split(r"[.,;:!?\n।]", window)[-1]
     return bool(_NEGATION_RE.search(clause))
 
 
-def _first_unnegated_match(pattern: "re.Pattern[str]", text: str) -> Optional[str]:
+def _first_unnegated_match(pattern: "re.Pattern[str]", text: str) -> str | None:
     for match in pattern.finditer(text):
         if not _is_negated(text, match.start()):
             return match.group(0)
     return None
 
 
-def _evaluate_red_flag_guardrail(patient_text: str) -> Dict[str, Any]:
+def _evaluate_red_flag_guardrail(patient_text: str) -> dict[str, Any]:
     """Evaluate high-risk red flags before any model-based triage."""
     text = _normalize_symptom_text(patient_text)
 
-    category_matches: Dict[str, List[str]] = {}
+    category_matches: dict[str, list[str]] = {}
     for category, keyword_regexes in _RED_FLAG_KEYWORD_REGEXES.items():
         found = [kw for kw, regex in keyword_regexes if _first_unnegated_match(regex, text)]
         for pattern in _RED_FLAG_PATTERNS.get(category, []):
@@ -982,9 +1216,7 @@ def _evaluate_red_flag_guardrail(patient_text: str) -> Dict[str, Any]:
     matched_categories = list(category_matches.keys())
     total_matches = sum(len(v) for v in category_matches.values())
     has_uncertainty = any(marker in text for marker in _UNCERTAINTY_MARKERS)
-    explicit_critical_hit = any(
-        kw in _EXPLICIT_CRITICAL_KEYWORDS for kws in category_matches.values() for kw in kws
-    )
+    explicit_critical_hit = any(kw in _EXPLICIT_CRITICAL_KEYWORDS for kws in category_matches.values() for kw in kws)
 
     confidence = 0.0
     if explicit_critical_hit:
@@ -1004,7 +1236,9 @@ def _evaluate_red_flag_guardrail(patient_text: str) -> Dict[str, Any]:
         sample = ", ".join(category_matches[category][:3])
         reasons.append(f"Red-flag {category.replace('_', ' ')} indicators detected: {sample}.")
     if ambiguous:
-        reasons.append("Symptoms are ambiguous but suggest possible emergency risk; conservative safety guidance applied.")
+        reasons.append(
+            "Symptoms are ambiguous but suggest possible emergency risk; conservative safety guidance applied."
+        )
 
     return {
         "apply_guardrail": guardrail_hit,
@@ -1017,7 +1251,7 @@ def _evaluate_red_flag_guardrail(patient_text: str) -> Dict[str, Any]:
     }
 
 
-def _build_guardrail_triage(red_flag: Dict[str, Any], language: Optional[str] = None) -> Dict[str, Any]:
+def _build_guardrail_triage(red_flag: dict[str, Any], language: str | None = None) -> dict[str, Any]:
     lang = _normalize_language(language)
     reasons = _localize_guardrail_reasons(red_flag, lang)
     actions_map = {
@@ -1048,10 +1282,11 @@ def _build_guardrail_triage(red_flag: Dict[str, Any], language: Optional[str] = 
         }
     )
 
+
 def _compose_guardrail_response_text(
-    red_flag: Dict[str, Any],
-    triage_data: Dict[str, Any],
-    language: Optional[str] = None,
+    red_flag: dict[str, Any],
+    triage_data: dict[str, Any],
+    language: str | None = None,
 ) -> str:
     lang = _normalize_language(language)
     category_text = _localize_guardrail_categories(red_flag.get("matched_categories", []), lang)
@@ -1079,7 +1314,7 @@ def _compose_guardrail_response_text(
     )
 
 
-def _build_emergency_action_block(red_flag: Dict[str, Any], language: Optional[str] = None) -> Dict[str, Any]:
+def _build_emergency_action_block(red_flag: dict[str, Any], language: str | None = None) -> dict[str, Any]:
     lang = _normalize_language(language)
     ambulance = EMERGENCY_NUMBERS.get("ambulance", "108")
     mental_health = EMERGENCY_NUMBERS.get("mental_health")
@@ -1105,10 +1340,13 @@ def _build_emergency_action_block(red_flag: Dict[str, Any], language: Optional[s
     immediate_actions = list(immediate_actions_map.get(lang, immediate_actions_map["en"]))
 
     if red_flag.get("ambiguous"):
-        immediate_actions.insert(0, {
-            "hi": "लक्षण स्पष्ट नहीं हैं; सुरक्षा के लिए आपातकालीन सलाह दी जा रही है।",
-            "mr": "लक्षण स्पष्ट नाहीत; सुरक्षिततेसाठी आपत्कालीन मार्गदर्शन दिले आहे.",
-        }.get(lang, "Symptoms are uncertain; using conservative emergency-first guidance for safety."))
+        immediate_actions.insert(
+            0,
+            {
+                "hi": "लक्षण स्पष्ट नहीं हैं; सुरक्षा के लिए आपातकालीन सलाह दी जा रही है।",
+                "mr": "लक्षण स्पष्ट नाहीत; सुरक्षिततेसाठी आपत्कालीन मार्गदर्शन दिले आहे.",
+            }.get(lang, "Symptoms are uncertain; using conservative emergency-first guidance for safety."),
+        )
 
     emergency_numbers = {
         "ambulance": ambulance,
@@ -1116,10 +1354,12 @@ def _build_emergency_action_block(red_flag: Dict[str, Any], language: Optional[s
     }
     if "self_harm" in categories and mental_health:
         emergency_numbers["mental_health"] = mental_health
-        immediate_actions.append({
-            "hi": f"व्यक्ति को अकेला न छोड़ें। मानसिक स्वास्थ्य हेल्पलाइन: {mental_health}।",
-            "mr": f"व्यक्तीला एकटे सोडू नका. मानसिक आरोग्य हेल्पलाइन: {mental_health}.",
-        }.get(lang, f"Do not leave the person alone. Mental health helpline: {mental_health}."))
+        immediate_actions.append(
+            {
+                "hi": f"व्यक्ति को अकेला न छोड़ें। मानसिक स्वास्थ्य हेल्पलाइन: {mental_health}।",
+                "mr": f"व्यक्तीला एकटे सोडू नका. मानसिक आरोग्य हेल्पलाइन: {mental_health}.",
+            }.get(lang, f"Do not leave the person alone. Mental health helpline: {mental_health}.")
+        )
 
     return {
         "type": "emergency_guardrail",
@@ -1136,12 +1376,12 @@ def _build_emergency_action_block(red_flag: Dict[str, Any], language: Optional[s
 
 
 def _critical_vital_findings(
-    heart_rate: Optional[float] = None,
-    bp_systolic: Optional[float] = None,
-    bp_diastolic: Optional[float] = None,
-    spo2: Optional[float] = None,
-    temperature: Optional[float] = None,
-) -> List[str]:
+    heart_rate: float | None = None,
+    bp_systolic: float | None = None,
+    bp_diastolic: float | None = None,
+    spo2: float | None = None,
+    temperature: float | None = None,
+) -> list[str]:
     """Vital signs in the critical range (emergency_triage.constants thresholds)."""
     limits = VITAL_SIGNS_CRITICAL
     findings = []
@@ -1158,13 +1398,13 @@ def _critical_vital_findings(
     return findings
 
 
-def _evaluate_toxin_fast_lane(patient_text: str) -> Dict[str, Any]:
+def _evaluate_toxin_fast_lane(patient_text: str) -> dict[str, Any]:
     """Detect toxin/poison exposure early and conservatively."""
     text = str(patient_text or "").lower()
-    category_matches: Dict[str, List[str]] = {}
+    category_matches: dict[str, list[str]] = {}
 
     for category, keywords in TOXIN_FAST_LANE_KEYWORDS.items():
-        seen: List[str] = []
+        seen: list[str] = []
         for keyword in keywords:
             if keyword and keyword in text and keyword not in seen:
                 seen.append(keyword)
@@ -1199,7 +1439,7 @@ def _evaluate_toxin_fast_lane(patient_text: str) -> Dict[str, Any]:
     }
 
 
-def _build_toxin_fast_lane_triage(toxin_flag: Dict[str, Any], language: Optional[str] = None) -> Dict[str, Any]:
+def _build_toxin_fast_lane_triage(toxin_flag: dict[str, Any], language: str | None = None) -> dict[str, Any]:
     lang = _normalize_language(language)
     reasons = _localize_toxin_reasons(toxin_flag, lang)
     actions_map = {
@@ -1233,7 +1473,7 @@ def _build_toxin_fast_lane_triage(toxin_flag: Dict[str, Any], language: Optional
     )
 
 
-def _build_toxin_emergency_action_block(toxin_flag: Dict[str, Any], language: Optional[str] = None) -> Dict[str, Any]:
+def _build_toxin_emergency_action_block(toxin_flag: dict[str, Any], language: str | None = None) -> dict[str, Any]:
     lang = _normalize_language(language)
     ambulance = EMERGENCY_NUMBERS.get("ambulance", "108")
     immediate_actions_map = {
@@ -1283,9 +1523,9 @@ def _build_toxin_emergency_action_block(toxin_flag: Dict[str, Any], language: Op
 
 
 def _compose_toxin_response_text(
-    toxin_flag: Dict[str, Any],
-    triage_data: Dict[str, Any],
-    language: Optional[str] = None,
+    toxin_flag: dict[str, Any],
+    triage_data: dict[str, Any],
+    language: str | None = None,
 ) -> str:
     lang = _normalize_language(language)
     category_text = _localize_toxin_categories(toxin_flag.get("matched_categories", []), lang)
@@ -1312,6 +1552,7 @@ def _compose_toxin_response_text(
         f"Call {ambulance} now and seek emergency care immediately."
     )
 
+
 _AUDIO_FILENAME_RE = re.compile(r"^doctor_response_[0-9a-f]{32}\.(?:wav|mp3)$")
 
 
@@ -1322,7 +1563,7 @@ def _audio_path_for(filename: str) -> str:
     return os.path.join(AUDIO_OUTPUT_DIR, filename)
 
 
-def _generate_response_audio(text: str, language: str) -> Optional[str]:
+def _generate_response_audio(text: str, language: str) -> str | None:
     """Speak the response with offline TTS; returns its URL or None."""
     if not LOCAL_TTS_ENABLED:
         return None
@@ -1346,14 +1587,17 @@ def _generate_response_audio(text: str, language: str) -> Optional[str]:
 _FRONTEND_BUILT = (FRONTEND_DIST_DIR / "index.html").is_file()
 
 if not _FRONTEND_BUILT:
+
     @app.get("/")
     def read_root():
         return {"status": "healthy", "message": "HealStation AI: Doctor Assistant API is running"}
+
 
 @app.get("/api")
 def api_health_check():
     """API health check endpoint for frontend to verify connection"""
     return {"status": "healthy", "message": "HealStation AI: Doctor Assistant API is running"}
+
 
 @app.get("/api/stt-health")
 def stt_health_check():
@@ -1386,6 +1630,7 @@ def stt_health_check():
             "error": str(error),
             "languages": ["en", "hi", "mr"],
         }
+
 
 @app.get("/api/ollama-status")
 def ollama_status():
@@ -1487,6 +1732,7 @@ def transcribe_audio_endpoint(audio: UploadFile = File(...), language: str = For
         if temp_audio_path and os.path.exists(temp_audio_path):
             os.remove(temp_audio_path)
 
+
 @app.post("/api/get-doctor-response", response_model=ConsultationResponse)
 def get_consultation(request: ConsultationRequest, background_tasks: BackgroundTasks):
     """
@@ -1495,10 +1741,12 @@ def get_consultation(request: ConsultationRequest, background_tasks: BackgroundT
     worker thread instead of stalling the event loop for every other request.
     """
     try:
-        logger.info("Consultation request | lang=%s text_len=%d images=%d",
-                    request.language,
-                    len(request.patient_text) if request.patient_text else 0,
-                    len(request.image_data) if request.image_data else 0)
+        logger.info(
+            "Consultation request | lang=%s text_len=%d images=%d",
+            request.language,
+            len(request.patient_text) if request.patient_text else 0,
+            len(request.image_data) if request.image_data else 0,
+        )
 
         # Step 4 fast-lane: evaluate toxin/poison exposure before any other triage flow.
         toxin_flag = _evaluate_toxin_fast_lane(request.patient_text)
@@ -1527,11 +1775,19 @@ def get_consultation(request: ConsultationRequest, background_tasks: BackgroundT
 
                 # Step 1: Parse vitals from text
                 parsed_vitals = _parse_vital_signs_from_text(request.patient_text)
-                request.heart_rate = request.heart_rate if request.heart_rate is not None else parsed_vitals.get("heart_rate")
-                request.bp_systolic = request.bp_systolic if request.bp_systolic is not None else parsed_vitals.get("bp_systolic")
-                request.bp_diastolic = request.bp_diastolic if request.bp_diastolic is not None else parsed_vitals.get("bp_diastolic")
+                request.heart_rate = (
+                    request.heart_rate if request.heart_rate is not None else parsed_vitals.get("heart_rate")
+                )
+                request.bp_systolic = (
+                    request.bp_systolic if request.bp_systolic is not None else parsed_vitals.get("bp_systolic")
+                )
+                request.bp_diastolic = (
+                    request.bp_diastolic if request.bp_diastolic is not None else parsed_vitals.get("bp_diastolic")
+                )
                 request.spo2 = request.spo2 if request.spo2 is not None else parsed_vitals.get("spo2")
-                request.temperature = request.temperature if request.temperature is not None else parsed_vitals.get("temperature")
+                request.temperature = (
+                    request.temperature if request.temperature is not None else parsed_vitals.get("temperature")
+                )
 
                 # Step 2: Local Gemma triage
                 local_triage_raw = _run_local_gemma_triage(
@@ -1589,8 +1845,7 @@ def get_consultation(request: ConsultationRequest, background_tasks: BackgroundT
                         triage_data["urgency"] = "high"
                         triage_data["reasons"] = vital_findings + triage_data["reasons"]
                         triage_data["actions"] = (
-                            _build_guardrail_triage(vitals_flag, request.language)["actions"]
-                            + triage_data["actions"]
+                            _build_guardrail_triage(vitals_flag, request.language)["actions"] + triage_data["actions"]
                         )
 
                 # Keep old keys for backward compatibility
@@ -1620,9 +1875,14 @@ def get_consultation(request: ConsultationRequest, background_tasks: BackgroundT
             doctor_text = _compose_doctor_response_from_triage(triage_data)
 
         doctor_text = _enforce_doctor_response_language(doctor_text, request.language)
-        
-        logger.info("Response ready | urgency=%s specialist=%s source=%s len=%d",
-                    urgency_level, specialist_recommendation, triage_source, len(doctor_text))
+
+        logger.info(
+            "Response ready | urgency=%s specialist=%s source=%s len=%d",
+            urgency_level,
+            specialist_recommendation,
+            triage_source,
+            len(doctor_text),
+        )
 
         fairness_metrics = None
         try:
@@ -1645,7 +1905,7 @@ def get_consultation(request: ConsultationRequest, background_tasks: BackgroundT
             pdf_data=request.pdf_data,
             final_urgency=triage_data.get("urgency", "low"),
         )
-        
+
         audio_url = _generate_response_audio(doctor_text, request.language)
 
         # Clean up old audio files in the background
@@ -1668,7 +1928,7 @@ def get_consultation(request: ConsultationRequest, background_tasks: BackgroundT
             "consensus_explanation": consensus_explanation,
             "fairness_metrics": fairness_metrics,
         }
-        
+
         logger.info("Consultation completed successfully.")
         return response_data
 
@@ -1679,7 +1939,8 @@ def get_consultation(request: ConsultationRequest, background_tasks: BackgroundT
         raise HTTPException(
             status_code=503,
             detail=_localized_message(_ASSESSMENT_FAILED_MESSAGES, request.language),
-        )
+        ) from None
+
 
 @app.get("/api/audio/{filename}")
 def get_audio(filename: str):
@@ -1699,6 +1960,7 @@ def get_audio(filename: str):
         },
     )
 
+
 @app.get("/api/voices")
 async def get_voices():
     """
@@ -1706,7 +1968,8 @@ async def get_voices():
     """
     return get_available_voices()
 
-def _format_directory_entry(entry: Dict[str, Any], specialty: str) -> Dict[str, Any]:
+
+def _format_directory_entry(entry: dict[str, Any], specialty: str) -> dict[str, Any]:
     """Shape a static-directory entry for the UI.
 
     Only facility-level data from the directory is passed through; fields the
@@ -1742,9 +2005,7 @@ def _format_directory_entry(entry: Dict[str, Any], specialty: str) -> Dict[str, 
         "source": entry.get("source", "static_directory"),
         "data_type": entry.get("data_type", "directory_listing"),
         "verified": bool(entry.get("verified", False)),
-        "verification_note": entry.get(
-            "verification_note", "Please verify current information with the facility."
-        ),
+        "verification_note": entry.get("verification_note", "Please verify current information with the facility."),
         "safety_warning": "⚠️ Always call ahead to confirm doctor availability, fees, and appointment requirements",
         "last_updated": entry.get("last_updated", "Not verified"),
     }
@@ -1775,7 +2036,9 @@ async def search_doctors_endpoint(request: DoctorSearchRequest):
         )
     except Exception:
         logger.exception("Doctor search failed")
-        return DoctorSearchResponse(doctors=[], total_found=0, search_params={**search_params, "error": "search_failed"})
+        return DoctorSearchResponse(
+            doctors=[], total_found=0, search_params={**search_params, "error": "search_failed"}
+        )
 
     doctors = [_format_directory_entry(entry, request.specialty) for entry in entries]
     return DoctorSearchResponse(doctors=doctors, total_found=len(doctors), search_params=search_params)
@@ -1805,7 +2068,9 @@ async def search_doctors_by_city_endpoint(request: CitySearchRequest):
     except Exception:
         logger.exception("City doctor search failed")
         return CitySearchResponse(
-            doctors=[], total_found=0, city_coordinates=None,
+            doctors=[],
+            total_found=0,
+            city_coordinates=None,
             search_params={**search_params, "error": "search_failed"},
         )
 
@@ -1865,94 +2130,95 @@ hospital_router = HospitalRoutingService()
 
 class QuickTriageRequest(BaseModel):
     """Quick triage check for real-time symptom analysis"""
+
     symptoms: str = Field(..., max_length=MAX_TEXT_CHARS, description="Symptom description")
 
 
 class QuickTriageResponse(BaseModel):
     """Quick triage response with essential info"""
+
     triage_level: int
     triage_level_name: str
     triage_color: str
     call_108: bool
     action: str
     icon: str
-    matched_keywords: List[str] = []
+    matched_keywords: list[str] = []
 
 
 @app.post("/api/emergency-triage", response_model=TriageResponse)
 async def emergency_triage(request: EmergencyTriageRequest):
     """
     🚨 EMERGENCY TRIAGE ASSESSMENT
-    
+
     Performs comprehensive emergency risk scoring including:
     - HEART Score for chest pain/cardiac assessment
     - BE-FAST Score for stroke detection
     - Trauma severity scoring
     - 5-level ESI-like triage classification
-    
+
     Returns triage level, risk scores, and hospital routing.
-    
-    ⚠️ DISCLAIMER: This is for guidance only and does NOT replace 
+
+    ⚠️ DISCLAIMER: This is for guidance only and does NOT replace
     professional medical judgment. In emergencies, CALL 108 IMMEDIATELY.
     """
     try:
-        
         # Step 1: Classify emergency level and calculate scores
         triage_result = emergency_classifier.classify(request)
-        
+
         logger.info(
             "Emergency triage: level=%s type=%s call_108=%s",
-            triage_result.triage_level, triage_result.emergency_type, triage_result.call_108,
+            triage_result.triage_level,
+            triage_result.emergency_type,
+            triage_result.call_108,
         )
-        
+
         # Step 2: Find nearby emergency hospitals if location provided
         if request.latitude and request.longitude:
             try:
                 # Determine required capabilities based on emergency type
                 required_capabilities = ["emergency_room", "24x7"]
-                
+
                 if triage_result.emergency_type == "cardiac":
                     required_capabilities.append("cardiac_care")
                 elif triage_result.emergency_type == "stroke":
                     required_capabilities.append("stroke_unit")
                 elif triage_result.emergency_type == "trauma":
                     required_capabilities.append("trauma_center")
-                
+
                 hospital_request = HospitalSearchRequest(
                     latitude=request.latitude,
                     longitude=request.longitude,
                     radius_km=15,  # 15km radius for emergencies
                     required_capabilities=required_capabilities,
                     triage_level=triage_result.triage_level,
-                    emergency_type=triage_result.emergency_type
+                    emergency_type=triage_result.emergency_type,
                 )
-                
+
                 hospitals = await hospital_router.find_emergency_hospitals(hospital_request)
-                
+
                 # Update triage result with hospitals
                 triage_result.hospitals = hospitals
                 triage_result.nearest_capable_hospital = hospital_router.get_best_match(
                     hospitals, triage_result.emergency_type
                 )
-                
-                
+
             except Exception:
                 logger.exception("Hospital routing failed")
                 # Continue without hospital data
-        
+
         return triage_result
-        
+
     except Exception:
         logger.exception("Emergency triage failed")
-        
+
         # Return a safe fallback - always recommend calling 108 on error
         raise HTTPException(
-            status_code=500,
-            detail="Emergency triage system error. Please CALL 108 for emergencies."
-        )
+            status_code=500, detail="Emergency triage system error. Please CALL 108 for emergencies."
+        ) from None
 
 
-def _quick_triage(symptoms: str) -> Dict[str, Any]:
+def _quick_triage(symptoms: str) -> dict[str, Any]:
     try:
         if not symptoms or len(symptoms) < 3:
             return {
@@ -1962,7 +2228,7 @@ def _quick_triage(symptoms: str) -> Dict[str, Any]:
                 "call_108": False,
                 "action": "Continue describing your symptoms",
                 "icon": "ℹ️",
-                "matched_keywords": []
+                "matched_keywords": [],
             }
         return QuickTriageResponse(**emergency_classifier.quick_classify(symptoms)).model_dump()
     except Exception:
@@ -1974,7 +2240,7 @@ def _quick_triage(symptoms: str) -> Dict[str, Any]:
             "call_108": False,
             "action": "Quick check unavailable. If symptoms are severe, call 108.",
             "icon": "ℹ️",
-            "matched_keywords": []
+            "matched_keywords": [],
         }
 
 
@@ -1997,18 +2263,17 @@ async def quick_emergency_triage_get(symptoms: str):
 async def find_emergency_hospitals(request: HospitalSearchRequest):
     """
     🏥 EMERGENCY HOSPITAL SEARCH
-    
+
     Find nearby hospitals with emergency capabilities.
     Uses Overpass API (OpenStreetMap) with static database fallback.
-    
+
     Returns hospitals sorted by:
     1. Capability match (ER, ICU, cardiac care, etc.)
     2. Distance from user
     """
     try:
-        
         hospitals = await hospital_router.find_emergency_hospitals(request)
-        
+
         return {
             "hospitals": [h.model_dump() for h in hospitals],
             "total_found": len(hospitals),
@@ -2016,24 +2281,21 @@ async def find_emergency_hospitals(request: HospitalSearchRequest):
                 "latitude": request.latitude,
                 "longitude": request.longitude,
                 "radius_km": request.radius_km,
-                "required_capabilities": request.required_capabilities
+                "required_capabilities": request.required_capabilities,
             },
-            "nearest_with_er": hospitals[0].model_dump() if hospitals else None
+            "nearest_with_er": hospitals[0].model_dump() if hospitals else None,
         }
-        
+
     except Exception:
         logger.exception("Hospital search failed")
-        raise HTTPException(
-            status_code=500,
-            detail="Hospital search failed. For emergencies, CALL 108."
-        )
+        raise HTTPException(status_code=500, detail="Hospital search failed. For emergencies, CALL 108.") from None
 
 
 @app.get("/api/emergency-info")
 async def get_emergency_info():
     """
     📞 GET EMERGENCY INFORMATION
-    
+
     Returns emergency numbers and triage level definitions.
     Useful for frontend to display emergency contacts.
     """
@@ -2050,11 +2312,11 @@ async def get_emergency_info():
                 "action": config["action"],
                 "action_hindi": config.get("action_hindi", ""),
                 "call_108": config["call_108"],
-                "icon": config["icon"]
+                "icon": config["icon"],
             }
             for level, config in TRIAGE_LEVELS.items()
         },
-        "disclaimer": "⚠️ This AI assessment is for guidance only and does NOT replace professional medical judgment. In any emergency, CALL 108 IMMEDIATELY."
+        "disclaimer": "⚠️ This AI assessment is for guidance only and does NOT replace professional medical judgment. In any emergency, CALL 108 IMMEDIATELY.",
     }
 
 
@@ -2063,11 +2325,7 @@ async def health_check():
     """System health check including emergency services"""
     return {
         "status": "healthy",
-        "services": {
-            "api": "running",
-            "emergency_triage": "available",
-            "hospital_routing": "available"
-        },
+        "services": {"api": "running", "emergency_triage": "available", "hospital_routing": "available"},
         "emergency_number": "108",
         "version": "2.0.0",
     }

@@ -1,4 +1,5 @@
 """Regression tests for clinical-safety behaviour of the consultation pipeline."""
+
 import ast
 from pathlib import Path
 
@@ -84,9 +85,7 @@ def test_vitals_parser_accepts_ui_placeholder_format():
 
 
 def test_vitals_parser_long_form_and_celsius():
-    vitals = api._parse_vital_signs_from_text(
-        "Blood Pressure: 120/80, Oxygen Saturation: 97, Temperature: 37.2 C"
-    )
+    vitals = api._parse_vital_signs_from_text("Blood Pressure: 120/80, Oxygen Saturation: 97, Temperature: 37.2 C")
     assert vitals["bp_systolic"] == 120
     assert vitals["spo2"] == 97
     assert vitals["temperature"] == 37.2
@@ -108,7 +107,13 @@ def test_unknown_model_urgency_is_not_trusted():
         "specialist": "general",
         "confidence": 0.95,
     }
-    fallback = {"urgency": "urgent", "reasons": ["rules"], "actions": ["go"], "specialist": "general", "confidence": 0.7}
+    fallback = {
+        "urgency": "urgent",
+        "reasons": ["rules"],
+        "actions": ["go"],
+        "specialist": "general",
+        "confidence": 0.7,
+    }
     triage, source = select_offline_first_triage(local, fallback, confidence_threshold=0.6)
     assert source == "emergency_fallback"
 
@@ -129,14 +134,18 @@ def test_no_triage_source_never_reports_low():
 
 def test_critical_vitals_floor_overrides_low_model_urgency(monkeypatch):
     _stub_tts(monkeypatch)
-    monkeypatch.setattr(api, "_run_local_gemma_triage", lambda *args, **kwargs: {
-        "urgency": "low",
-        "reasons": ["Mild headache"],
-        "actions": ["Rest"],
-        "specialist": "general",
-        "confidence": 0.95,
-        "doctor_response": "URGENCY: LOW",
-    })
+    monkeypatch.setattr(
+        api,
+        "_run_local_gemma_triage",
+        lambda *args, **kwargs: {
+            "urgency": "low",
+            "reasons": ["Mild headache"],
+            "actions": ["Rest"],
+            "specialist": "general",
+            "confidence": 0.95,
+            "doctor_response": "URGENCY: LOW",
+        },
+    )
 
     response = TestClient(api.app).post(
         "/api/get-doctor-response",

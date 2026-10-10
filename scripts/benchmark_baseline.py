@@ -9,6 +9,7 @@ estimated.
 Usage:
     python scripts/benchmark_baseline.py [--runs 50] [--json out.json]
 """
+
 from __future__ import annotations
 
 import argparse

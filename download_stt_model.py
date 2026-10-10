@@ -11,7 +11,9 @@ After success:
     3. Change LOCAL_STT_LOCAL_FILES_ONLY=false  →  LOCAL_STT_LOCAL_FILES_ONLY=true
     4. Restart the backend server
 """
+
 import time
+
 print("=" * 60)
 print("  HealStation AI - Whisper Model Downloader")
 print("=" * 60)
@@ -21,6 +23,7 @@ print("This only needs to happen ONCE. Please stay connected.\n")
 start = time.time()
 try:
     from faster_whisper import WhisperModel
+
     print("[1/2] Loading 'small' model (will download if not cached)...")
     model = WhisperModel(
         "small",

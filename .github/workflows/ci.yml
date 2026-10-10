@@ -29,8 +29,34 @@ jobs:
           sudo apt-get install -y -q tesseract-ocr tesseract-ocr-hin tesseract-ocr-mar
       - name: Install locked dependencies
         run: pip install --require-hashes -r requirements-dev.lock
+      - name: Lint
+        run: ruff check .
+      - name: Format
+        run: ruff format --check .
       - name: Run tests
-        run: python -m pytest -q
+        run: python -m pytest -q --cov --cov-report=term-missing:skip-covered
+
+  security:
+    name: Dependency and secret scanning
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Audit Python dependencies
+        run: |
+          pip install pip-audit
+          pip-audit --strict --disable-pip --require-hashes -r requirements.lock
+          pip-audit --strict --disable-pip --require-hashes -r requirements-dev.lock
+      - name: Scan history for secrets
+        env:
+          GITLEAKS_VERSION: 8.21.2
+        run: |
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | tar -xz gitleaks
+          ./gitleaks detect --source . --redact --no-banner
 
   frontend:
     name: Frontend lint and build

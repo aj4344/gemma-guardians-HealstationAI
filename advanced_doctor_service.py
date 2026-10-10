@@ -6,9 +6,8 @@ with Top-Rated, City Search, Time-based filtering and advanced sorting
 
 import asyncio
 import logging
-from typing import List, Dict, Optional
-from datetime import datetime
 import math
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +19,7 @@ DIRECTORY_VERIFICATION_NOTE = (
     "Directory listing, not independently verified. Call the hospital to confirm "
     "the doctor, timings and fees before visiting."
 )
+
 
 class AdvancedDoctorSearchService:
     def __init__(self):
@@ -42,11 +42,11 @@ class AdvancedDoctorSearchService:
                         "longitude": 73.8636,
                         "source": "prominent_medical",
                         "availability": "Mon-Sat: 9:00 AM - 6:00 PM",
-                        "next_available": "Today 2:00 PM"
+                        "next_available": "Today 2:00 PM",
                     },
                     {
                         "name": "Dr. Debjyoti Roy",
-                        "specialty": "Nephrologist", 
+                        "specialty": "Nephrologist",
                         "hospital": "Ruby Hall Clinic",
                         "address": "40, Sangamvadi, Sasoon Road, Pune Railway Station, Pune",
                         "phone": "+91 20 2613 6000",
@@ -59,8 +59,8 @@ class AdvancedDoctorSearchService:
                         "longitude": 73.8567,
                         "source": "prominent_medical",
                         "availability": "Mon-Fri: 10:00 AM - 5:00 PM",
-                        "next_available": "Tomorrow 10:00 AM"
-                    }
+                        "next_available": "Tomorrow 10:00 AM",
+                    },
                 ],
                 "cardiologist": [
                     {
@@ -78,7 +78,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 73.8567,
                         "source": "prominent_medical",
                         "availability": "Mon-Sat: 8:00 AM - 7:00 PM",
-                        "next_available": "Today 3:30 PM"
+                        "next_available": "Today 3:30 PM",
                     }
                 ],
                 "dermatologist": [
@@ -97,7 +97,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 73.8446,
                         "source": "prominent_medical",
                         "availability": "Tue-Sun: 11:00 AM - 6:00 PM",
-                        "next_available": "Today 4:00 PM"
+                        "next_available": "Today 4:00 PM",
                     }
                 ],
                 "orthopedic": [
@@ -116,7 +116,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 73.8486,
                         "source": "prominent_medical",
                         "availability": "Mon-Sat: 9:00 AM - 5:00 PM",
-                        "next_available": "Today 3:00 PM"
+                        "next_available": "Today 3:00 PM",
                     }
                 ],
                 "ophthalmologist": [
@@ -135,7 +135,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 73.8489,
                         "source": "prominent_medical",
                         "availability": "Mon-Sat: 9:00 AM - 6:00 PM",
-                        "next_available": "Today 11:00 AM"
+                        "next_available": "Today 11:00 AM",
                     }
                 ],
                 "neurologist": [
@@ -154,7 +154,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 73.8636,
                         "source": "prominent_medical",
                         "availability": "Mon-Fri: 10:00 AM - 4:00 PM",
-                        "next_available": "Tomorrow 10:00 AM"
+                        "next_available": "Tomorrow 10:00 AM",
                     }
                 ],
                 "psychiatrist": [
@@ -173,7 +173,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 73.8567,
                         "source": "prominent_medical",
                         "availability": "Mon-Sat: 11:00 AM - 5:00 PM",
-                        "next_available": "Today 2:00 PM"
+                        "next_available": "Today 2:00 PM",
                     }
                 ],
                 "pediatrician": [
@@ -192,7 +192,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 73.8707,
                         "source": "prominent_medical",
                         "availability": "Mon-Sat: 9:00 AM - 7:00 PM",
-                        "next_available": "Today 4:00 PM"
+                        "next_available": "Today 4:00 PM",
                     }
                 ],
                 "gynecologist": [
@@ -211,7 +211,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 73.8446,
                         "source": "prominent_medical",
                         "availability": "Mon-Sat: 10:00 AM - 6:00 PM",
-                        "next_available": "Today 3:30 PM"
+                        "next_available": "Today 3:30 PM",
                     }
                 ],
                 "pulmonologist": [
@@ -230,7 +230,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 73.8486,
                         "source": "prominent_medical",
                         "availability": "Mon-Fri: 9:00 AM - 5:00 PM",
-                        "next_available": "Tomorrow 9:00 AM"
+                        "next_available": "Tomorrow 9:00 AM",
                     }
                 ],
                 "urologist": [
@@ -249,7 +249,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 73.8567,
                         "source": "prominent_medical",
                         "availability": "Mon-Sat: 10:00 AM - 5:00 PM",
-                        "next_available": "Today 11:30 AM"
+                        "next_available": "Today 11:30 AM",
                     }
                 ],
                 "general": [
@@ -268,9 +268,9 @@ class AdvancedDoctorSearchService:
                         "longitude": 73.8471,
                         "source": "prominent_medical",
                         "availability": "Mon-Sat: 8:00 AM - 8:00 PM",
-                        "next_available": "Today 10:00 AM"
+                        "next_available": "Today 10:00 AM",
                     }
-                ]
+                ],
             },
             "mumbai": {
                 "nephrologist": [
@@ -289,7 +289,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 72.8167,
                         "source": "prominent_medical",
                         "availability": "Mon-Sat: 9:00 AM - 6:00 PM",
-                        "next_available": "Today 11:00 AM"
+                        "next_available": "Today 11:00 AM",
                     }
                 ],
                 "cardiologist": [
@@ -308,7 +308,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 72.8856,
                         "source": "prominent_medical",
                         "availability": "Mon-Fri: 8:00 AM - 6:00 PM",
-                        "next_available": "Tomorrow 9:00 AM"
+                        "next_available": "Tomorrow 9:00 AM",
                     }
                 ],
                 "dermatologist": [
@@ -327,7 +327,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 72.8295,
                         "source": "prominent_medical",
                         "availability": "Mon-Sat: 10:00 AM - 6:00 PM",
-                        "next_available": "Today 2:00 PM"
+                        "next_available": "Today 2:00 PM",
                     }
                 ],
                 "orthopedic": [
@@ -346,7 +346,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 72.8281,
                         "source": "prominent_medical",
                         "availability": "Mon-Sat: 9:00 AM - 5:00 PM",
-                        "next_available": "Tomorrow 10:00 AM"
+                        "next_available": "Tomorrow 10:00 AM",
                     }
                 ],
                 "ophthalmologist": [
@@ -365,7 +365,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 72.8295,
                         "source": "prominent_medical",
                         "availability": "Mon-Sat: 9:00 AM - 6:00 PM",
-                        "next_available": "Today 11:00 AM"
+                        "next_available": "Today 11:00 AM",
                     }
                 ],
                 "neurologist": [
@@ -384,7 +384,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 72.8269,
                         "source": "prominent_medical",
                         "availability": "Mon-Fri: 10:00 AM - 4:00 PM",
-                        "next_available": "Tomorrow 10:00 AM"
+                        "next_available": "Tomorrow 10:00 AM",
                     }
                 ],
                 "psychiatrist": [
@@ -403,7 +403,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 72.9081,
                         "source": "prominent_medical",
                         "availability": "Mon-Sat: 10:00 AM - 5:00 PM",
-                        "next_available": "Today 3:00 PM"
+                        "next_available": "Today 3:00 PM",
                     }
                 ],
                 "pediatrician": [
@@ -422,7 +422,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 72.8038,
                         "source": "prominent_medical",
                         "availability": "Mon-Sat: 9:00 AM - 6:00 PM",
-                        "next_available": "Today 4:00 PM"
+                        "next_available": "Today 4:00 PM",
                     }
                 ],
                 "gynecologist": [
@@ -441,7 +441,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 72.8414,
                         "source": "prominent_medical",
                         "availability": "Mon-Sat: 10:00 AM - 5:00 PM",
-                        "next_available": "Today 2:30 PM"
+                        "next_available": "Today 2:30 PM",
                     }
                 ],
                 "pulmonologist": [
@@ -460,7 +460,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 72.8414,
                         "source": "prominent_medical",
                         "availability": "Mon-Fri: 9:00 AM - 4:00 PM",
-                        "next_available": "Tomorrow 9:00 AM"
+                        "next_available": "Tomorrow 9:00 AM",
                     }
                 ],
                 "urologist": [
@@ -479,7 +479,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 72.8437,
                         "source": "prominent_medical",
                         "availability": "Mon-Sat: 10:00 AM - 5:00 PM",
-                        "next_available": "Today 11:30 AM"
+                        "next_available": "Today 11:30 AM",
                     }
                 ],
                 "general": [
@@ -498,9 +498,9 @@ class AdvancedDoctorSearchService:
                         "longitude": 72.8697,
                         "source": "prominent_medical",
                         "availability": "Mon-Sat: 8:00 AM - 8:00 PM",
-                        "next_available": "Today 10:00 AM"
+                        "next_available": "Today 10:00 AM",
                     }
-                ]
+                ],
             },
             "delhi": {
                 "cardiologist": [
@@ -519,7 +519,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 77.0266,
                         "source": "prominent_medical",
                         "availability": "Mon-Sat: 10:00 AM - 5:00 PM",
-                        "next_available": "Today 2:30 PM"
+                        "next_available": "Today 2:30 PM",
                     }
                 ],
                 "dermatologist": [
@@ -538,7 +538,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 77.2090,
                         "source": "prominent_medical",
                         "availability": "Mon-Sat: 10:00 AM - 6:00 PM",
-                        "next_available": "Today 3:00 PM"
+                        "next_available": "Today 3:00 PM",
                     }
                 ],
                 "orthopedic": [
@@ -557,7 +557,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 77.0716,
                         "source": "prominent_medical",
                         "availability": "Mon-Sat: 9:00 AM - 4:00 PM",
-                        "next_available": "Tomorrow 9:00 AM"
+                        "next_available": "Tomorrow 9:00 AM",
                     }
                 ],
                 "ophthalmologist": [
@@ -576,7 +576,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 77.1947,
                         "source": "prominent_medical",
                         "availability": "Mon-Sat: 9:00 AM - 6:00 PM",
-                        "next_available": "Today 11:00 AM"
+                        "next_available": "Today 11:00 AM",
                     }
                 ],
                 "neurologist": [
@@ -595,7 +595,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 77.2100,
                         "source": "prominent_medical",
                         "availability": "Mon-Fri: 9:00 AM - 4:00 PM",
-                        "next_available": "Next Week"
+                        "next_available": "Next Week",
                     }
                 ],
                 "psychiatrist": [
@@ -614,7 +614,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 77.3178,
                         "source": "prominent_medical",
                         "availability": "Mon-Sat: 10:00 AM - 4:00 PM",
-                        "next_available": "Today 2:00 PM"
+                        "next_available": "Today 2:00 PM",
                     }
                 ],
                 "pediatrician": [
@@ -633,7 +633,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 77.2910,
                         "source": "prominent_medical",
                         "availability": "Mon-Sat: 9:00 AM - 6:00 PM",
-                        "next_available": "Today 4:00 PM"
+                        "next_available": "Today 4:00 PM",
                     }
                 ],
                 "gynecologist": [
@@ -652,7 +652,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 77.2407,
                         "source": "prominent_medical",
                         "availability": "Mon-Sat: 10:00 AM - 5:00 PM",
-                        "next_available": "Today 3:00 PM"
+                        "next_available": "Today 3:00 PM",
                     }
                 ],
                 "pulmonologist": [
@@ -671,7 +671,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 77.2100,
                         "source": "prominent_medical",
                         "availability": "Mon-Fri: 9:00 AM - 4:00 PM",
-                        "next_available": "Next Week"
+                        "next_available": "Next Week",
                     }
                 ],
                 "urologist": [
@@ -690,7 +690,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 77.2000,
                         "source": "prominent_medical",
                         "availability": "Mon-Sat: 9:00 AM - 4:00 PM",
-                        "next_available": "Today 11:00 AM"
+                        "next_available": "Today 11:00 AM",
                     }
                 ],
                 "nephrologist": [
@@ -709,7 +709,7 @@ class AdvancedDoctorSearchService:
                         "longitude": 77.1537,
                         "source": "prominent_medical",
                         "availability": "Mon-Sat: 10:00 AM - 5:00 PM",
-                        "next_available": "Tomorrow 10:00 AM"
+                        "next_available": "Tomorrow 10:00 AM",
                     }
                 ],
                 "general": [
@@ -728,12 +728,12 @@ class AdvancedDoctorSearchService:
                         "longitude": 77.2384,
                         "source": "prominent_medical",
                         "availability": "Mon-Sat: 8:00 AM - 8:00 PM",
-                        "next_available": "Today 9:00 AM"
+                        "next_available": "Today 9:00 AM",
                     }
-                ]
-            }
+                ],
+            },
         }
-    
+
     def _calculate_distance(self, user_lat: float, user_lon: float, doctor_lat: float, doctor_lon: float) -> str:
         """Calculate distance between user and doctor location"""
         R = 6371  # Earth radius in kilometers
@@ -741,27 +741,27 @@ class AdvancedDoctorSearchService:
         lat2_rad = math.radians(doctor_lat)
         delta_lat = math.radians(doctor_lat - user_lat)
         delta_lon = math.radians(doctor_lon - user_lon)
-        
-        a = (math.sin(delta_lat/2) * math.sin(delta_lat/2) + 
-             math.cos(lat1_rad) * math.cos(lat2_rad) * 
-             math.sin(delta_lon/2) * math.sin(delta_lon/2))
-        
-        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+
+        a = math.sin(delta_lat / 2) * math.sin(delta_lat / 2) + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(
+            delta_lon / 2
+        ) * math.sin(delta_lon / 2)
+
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
         distance = R * c
-        
+
         return f"{distance:.1f} km"
-    
+
     def _calculate_distance_km(self, user_lat: float, user_lon: float, doctor_lat: float, doctor_lon: float) -> float:
         """Calculate distance in kilometers (float)"""
         distance_str = self._calculate_distance(user_lat, user_lon, doctor_lat, doctor_lon)
         return float(distance_str.split()[0])
-    
+
     def _determine_city(self, latitude: float, longitude: float) -> str:
         """Determine city based on coordinates"""
         # Pune coordinates: ~18.5204° N, 73.8567° E
         if 18.4 <= latitude <= 18.7 and 73.7 <= longitude <= 74.0:
             return "pune"
-        # Mumbai coordinates: ~19.0760° N, 72.8777° E  
+        # Mumbai coordinates: ~19.0760° N, 72.8777° E
         elif 18.9 <= latitude <= 19.3 and 72.7 <= longitude <= 73.1:
             return "mumbai"
         # Delhi coordinates: ~28.6139° N, 77.2090° E
@@ -775,21 +775,18 @@ class AdvancedDoctorSearchService:
             return "chennai"
         else:
             return "other"
-    
-    def _get_prominent_doctors(self, city: str, specialty: str, user_lat: float, user_lon: float) -> List[Dict]:
+
+    def _get_prominent_doctors(self, city: str, specialty: str, user_lat: float, user_lon: float) -> list[dict]:
         """Get prominent doctors from local database"""
         city_data = self.prominent_hospitals.get(city.lower(), {})
         specialty_data = city_data.get(specialty.lower(), [])
-        
+
         # Calculate actual distance for each doctor
         enhanced_doctors = []
         for doctor in specialty_data:
             doctor_copy = doctor.copy()
             # Calculate real distance from user location
-            actual_distance = self._calculate_distance(
-                user_lat, user_lon, 
-                doctor["latitude"], doctor["longitude"]
-            )
+            actual_distance = self._calculate_distance(user_lat, user_lon, doctor["latitude"], doctor["longitude"])
             doctor_copy["distance"] = actual_distance
             doctor_copy["distance_km"] = self._calculate_distance_km(
                 user_lat, user_lon, doctor["latitude"], doctor["longitude"]
@@ -799,21 +796,21 @@ class AdvancedDoctorSearchService:
             doctor_copy["data_type"] = "directory_listing"
             doctor_copy["verified"] = False
             enhanced_doctors.append(doctor_copy)
-        
+
         return enhanced_doctors
 
-    def _is_available_today(self, doctor: Dict) -> bool:
+    def _is_available_today(self, doctor: dict) -> bool:
         """Check if doctor is available today based on schedule"""
         availability = doctor.get("availability", "")
         current_day = datetime.now().strftime("%a")  # Mon, Tue, Wed, etc.
-        
+
         if current_day in availability:
             return True
         elif "Mon-Sat" in availability and current_day != "Sun":
             return True
         elif "Mon-Fri" in availability and current_day not in ["Sat", "Sun"]:
             return True
-        
+
         return False
 
     def _get_verified_rating(self, facility_data: dict) -> str:
@@ -838,12 +835,18 @@ class AdvancedDoctorSearchService:
         """Get only verified appointment availability - NO MOCK DATA"""
         return "Contact facility for appointments"
 
-    async def search_doctors_enhanced(self, specialty: str, latitude: float, longitude: float, 
-                                    radius: int = 25000, sort_by: str = "distance", 
-                                    limit: int = 10) -> List[Dict]:
+    async def search_doctors_enhanced(
+        self,
+        specialty: str,
+        latitude: float,
+        longitude: float,
+        radius: int = 25000,
+        sort_by: str = "distance",
+        limit: int = 10,
+    ) -> list[dict]:
         """
         ADVANCED Enhanced doctor search with Top-Rated, City Search, and Time-based filtering
-        
+
         Args:
             specialty: Medical specialty (e.g., "cardiologist")
             latitude: User's latitude
@@ -863,35 +866,39 @@ class AdvancedDoctorSearchService:
             if facility_key in seen_facilities:
                 continue
             seen_facilities.add(facility_key)
-            all_results.append({
-                "name": doctor['name'],
-                "specialty": doctor['specialty'],
-                "hospital": doctor['hospital'],
-                "address": doctor['address'],
-                "phone": doctor['phone'],
-                "latitude": doctor['latitude'],
-                "longitude": doctor['longitude'],
-                "distance": doctor['distance'],
-                "distance_km": doctor['distance_km'],
-                "source": doctor['source'],
-                "data_type": "directory_listing",
-                "available_today": doctor['available_today'],
-                "clinic_name": doctor['hospital'],
-                "verified": False,
-                "verification_note": DIRECTORY_VERIFICATION_NOTE,
-                "hours": doctor.get('availability', "Contact facility for hours"),
-                "availability_status": "Listed as open today" if doctor['available_today'] else "Contact for availability",
-                "next_available": "Contact for appointment",
-                "last_updated": "Not verified",
-            })
+            all_results.append(
+                {
+                    "name": doctor['name'],
+                    "specialty": doctor['specialty'],
+                    "hospital": doctor['hospital'],
+                    "address": doctor['address'],
+                    "phone": doctor['phone'],
+                    "latitude": doctor['latitude'],
+                    "longitude": doctor['longitude'],
+                    "distance": doctor['distance'],
+                    "distance_km": doctor['distance_km'],
+                    "source": doctor['source'],
+                    "data_type": "directory_listing",
+                    "available_today": doctor['available_today'],
+                    "clinic_name": doctor['hospital'],
+                    "verified": False,
+                    "verification_note": DIRECTORY_VERIFICATION_NOTE,
+                    "hours": doctor.get('availability', "Contact facility for hours"),
+                    "availability_status": "Listed as open today"
+                    if doctor['available_today']
+                    else "Contact for availability",
+                    "next_available": "Contact for appointment",
+                    "last_updated": "Not verified",
+                }
+            )
 
         result = self._apply_advanced_sorting(all_results, sort_by)[:limit]
         logger.debug("Directory search returning %d results (sort=%s)", len(result), sort_by)
         return result
 
-    def _apply_advanced_sorting(self, doctors: List[Dict], sort_by: str) -> List[Dict]:
+    def _apply_advanced_sorting(self, doctors: list[dict], sort_by: str) -> list[dict]:
         """Apply advanced sorting based on multiple criteria with safe numeric handling"""
-        
+
         # Helper function to safely extract numeric rating
         def safe_rating(doctor):
             rating = doctor.get('rating', '')
@@ -904,10 +911,10 @@ class AdvancedDoctorSearchService:
                     numeric_str = ''.join(c for c in rating if c.isdigit() or c == '.')
                     if numeric_str:
                         return float(numeric_str)
-                except:
-                    pass
+                except ValueError:
+                    return 0.0
             return 0.0  # Default for "Contact for ratings" or invalid values
-        
+
         # Helper function to safely extract review count
         def safe_review_count(doctor):
             reviews = doctor.get('reviews_count', '')
@@ -919,36 +926,29 @@ class AdvancedDoctorSearchService:
                     numeric_str = ''.join(c for c in reviews if c.isdigit())
                     if numeric_str:
                         return int(numeric_str)
-                except:
-                    pass
+                except ValueError:
+                    return 0
             return 0  # Default for "Contact for reviews" or invalid values
-        
+
         if sort_by == "distance" or sort_by == "nearest":
             # Sort by distance (ascending)
             return sorted(doctors, key=lambda x: x.get('distance_km', 999))
-            
+
         elif sort_by == "rating" or sort_by == "top_rated":
             # Sort by rating (descending), then by distance
             # Doctors with real ratings come first, then by distance
-            return sorted(doctors, key=lambda x: (
-                -safe_rating(x),
-                x.get('distance_km', 999)
-            ))
-            
+            return sorted(doctors, key=lambda x: (-safe_rating(x), x.get('distance_km', 999)))
+
         elif sort_by == "reviews" or sort_by == "most_reviews":
             # Sort by review count (descending), then by rating, then by distance
-            return sorted(doctors, key=lambda x: (
-                -safe_review_count(x),
-                -safe_rating(x),
-                x.get('distance_km', 999)
-            ))
-            
+            return sorted(doctors, key=lambda x: (-safe_review_count(x), -safe_rating(x), x.get('distance_km', 999)))
+
         elif sort_by == "availability" or sort_by == "available_today":
             # Sort by availability status, then by rating, then by distance
             def availability_score(doctor):
                 status = doctor.get('availability_status', '').lower()
                 available_today = doctor.get('available_today', False)
-                
+
                 if available_today and 'available' in status:
                     return 0  # Most available first
                 elif 'available' in status:
@@ -957,13 +957,9 @@ class AdvancedDoctorSearchService:
                     return 2
                 else:
                     return 3  # Least available last
-                    
-            return sorted(doctors, key=lambda x: (
-                availability_score(x),
-                -safe_rating(x),
-                x.get('distance_km', 999)
-            ))
-            
+
+            return sorted(doctors, key=lambda x: (availability_score(x), -safe_rating(x), x.get('distance_km', 999)))
+
         elif sort_by == "experience":
             # Sort by experience (descending), then by rating
             def experience_score(doctor):
@@ -971,29 +967,31 @@ class AdvancedDoctorSearchService:
                 if isinstance(exp, str) and '+' in exp:
                     try:
                         return int(exp.split('+')[0])
-                    except:
+                    except ValueError:
                         return 0
                 elif isinstance(exp, int):
                     return exp
                 return 0
-                
-            return sorted(doctors, key=lambda x: (
-                -experience_score(x),
-                -safe_rating(x),
-                x.get('distance_km', 999)
-            ))
-            
+
+            return sorted(doctors, key=lambda x: (-experience_score(x), -safe_rating(x), x.get('distance_km', 999)))
+
         else:
             # Default to distance sorting
             logger.debug("Unknown sort criteria %r, defaulting to distance", sort_by)
             return sorted(doctors, key=lambda x: x.get('distance_km', 999))
 
-    async def search_doctors_by_city(self, city: str, specialty: str, sort_by: str = "rating", 
-                                   limit: int = 20, user_latitude: float = None, 
-                                   user_longitude: float = None) -> List[Dict]:
+    async def search_doctors_by_city(
+        self,
+        city: str,
+        specialty: str,
+        sort_by: str = "rating",
+        limit: int = 20,
+        user_latitude: float = None,
+        user_longitude: float = None,
+    ) -> list[dict]:
         """
         CITY-BASED SEARCH with enhanced geocoding and sorting
-        
+
         Args:
             city: City name (e.g., "Mumbai", "Delhi", "Pune")
             specialty: Medical specialty
@@ -1003,14 +1001,13 @@ class AdvancedDoctorSearchService:
             user_longitude: Optional user location for distance calculation
         """
         logger.debug("City search for %s in %s (sort=%s, limit=%d)", specialty, city, sort_by, limit)
-        
+
         # Step 1: Get city coordinates using enhanced geocoding
         city_coords = await self._geocode_city(city)
         if not city_coords:
             logger.debug("Unknown city: %s", city)
             return []
-        
-        
+
         # Step 2: Search using city coordinates
         doctors = await self.search_doctors_enhanced(
             specialty=specialty,
@@ -1018,32 +1015,31 @@ class AdvancedDoctorSearchService:
             longitude=city_coords['longitude'],
             radius=50000,  # 50km radius for city search
             sort_by=sort_by,
-            limit=limit
+            limit=limit,
         )
-        
+
         # Step 3: If user location provided, recalculate distances from user
         if user_latitude and user_longitude:
             for doctor in doctors:
                 if doctor.get('latitude') and doctor.get('longitude'):
                     user_distance = self._calculate_distance(
-                        user_latitude, user_longitude,
-                        doctor['latitude'], doctor['longitude']
+                        user_latitude, user_longitude, doctor['latitude'], doctor['longitude']
                     )
                     doctor['user_distance'] = user_distance
                     doctor['user_distance_km'] = float(user_distance.split()[0])
-        
+
         # Step 4: Add city information to results
         for doctor in doctors:
             doctor['search_city'] = city
             doctor['city_search'] = True
             doctor['city_coordinates'] = city_coords
-        
+
         logger.debug("City search found %d results in %s", len(doctors), city)
         return doctors
 
-    async def _geocode_city(self, city: str) -> Optional[Dict[str, float]]:
+    async def _geocode_city(self, city: str) -> dict[str, float] | None:
         """Enhanced city geocoding with fallback coordinates"""
-        
+
         # Known city coordinates for major Indian cities
         known_cities = {
             "mumbai": {"latitude": 19.0760, "longitude": 72.8777},
@@ -1083,40 +1079,42 @@ class AdvancedDoctorSearchService:
             "ranchi": {"latitude": 23.3441, "longitude": 85.3096},
             "howrah": {"latitude": 22.5958, "longitude": 88.2636},
             "jabalpur": {"latitude": 23.1815, "longitude": 79.9864},
-            "gwalior": {"latitude": 26.2183, "longitude": 78.1828}
+            "gwalior": {"latitude": 26.2183, "longitude": 78.1828},
         }
-        
+
         city_lower = city.lower().strip()
-        
+
         # Check known cities first
         if city_lower in known_cities:
             return known_cities[city_lower]
-        
+
         # Final fallback: Return None
         return None
 
+
 # Main enhanced search function for API compatibility
-async def search_doctors_enhanced(specialty: str, latitude: float, longitude: float, 
-                                radius: int = 25000, sort_by: str = "distance", 
-                                limit: int = 10) -> List[Dict]:
+async def search_doctors_enhanced(
+    specialty: str, latitude: float, longitude: float, radius: int = 25000, sort_by: str = "distance", limit: int = 10
+) -> list[dict]:
     """
     ADVANCED Enhanced doctor search - API compatible function
     Queries local medical database for verified results
     """
     service = AdvancedDoctorSearchService()
     return await service.search_doctors_enhanced(
-        specialty=specialty,
-        latitude=latitude,
-        longitude=longitude, 
-        radius=radius,
-        sort_by=sort_by,
-        limit=limit
+        specialty=specialty, latitude=latitude, longitude=longitude, radius=radius, sort_by=sort_by, limit=limit
     )
 
+
 # City-based search function for API compatibility
-async def search_doctors_by_city(city: str, specialty: str, sort_by: str = "rating", 
-                                limit: int = 20, user_latitude: float = None, 
-                                user_longitude: float = None) -> List[Dict]:
+async def search_doctors_by_city(
+    city: str,
+    specialty: str,
+    sort_by: str = "rating",
+    limit: int = 20,
+    user_latitude: float = None,
+    user_longitude: float = None,
+) -> list[dict]:
     """
     ADVANCED City-based search - API compatible function
     """
@@ -1127,13 +1125,14 @@ async def search_doctors_by_city(city: str, specialty: str, sort_by: str = "rati
         sort_by=sort_by,
         limit=limit,
         user_latitude=user_latitude,
-        user_longitude=user_longitude
+        user_longitude=user_longitude,
     )
+
 
 # Manual smoke test: python advanced_doctor_service.py
 async def _demo():
     for doctor in await search_doctors_by_city(city="Pune", specialty="cardiologist", limit=5):
-        print(f"{doctor['name']} — {doctor['hospital']} ({doctor['distance']}) {doctor['phone']}")
+        print(f"{doctor['name']} — {doctor['hospital']} ({doctor['distance']}) {doctor['phone']}")  # noqa: T201
 
 
 if __name__ == "__main__":

@@ -4,9 +4,9 @@ Run 5 sample symptom queries against the local Gemma model (requires Ollama).
 Usage: python scripts/run_sample_queries.py
 """
 
-import sys
 import json
 import os
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -29,9 +29,39 @@ results = []
 for case_id, query in queries:
     try:
         result = api._run_local_gemma_triage(query, 'en')
-        
+
         if result is None:
-            results.append({
+            results.append(
+                {
+                    "case": case_id,
+                    "query": query,
+                    "ok": False,
+                    "urgency": None,
+                    "specialist": None,
+                    "confidence": None,
+                    "diagnosis": None,
+                    "reasons": [],
+                    "actions": [],
+                    "error": "No response from local Gemma",
+                }
+            )
+        else:
+            results.append(
+                {
+                    "case": case_id,
+                    "query": query,
+                    "ok": True,
+                    "urgency": result.get("urgency"),
+                    "specialist": result.get("specialist"),
+                    "confidence": result.get("confidence"),
+                    "diagnosis": result.get("doctor_response"),
+                    "reasons": result.get("reasons", []),
+                    "actions": result.get("actions", []),
+                }
+            )
+    except Exception as e:
+        results.append(
+            {
                 "case": case_id,
                 "query": query,
                 "ok": False,
@@ -41,33 +71,9 @@ for case_id, query in queries:
                 "diagnosis": None,
                 "reasons": [],
                 "actions": [],
-                "error": "No response from local Gemma"
-            })
-        else:
-            results.append({
-                "case": case_id,
-                "query": query,
-                "ok": True,
-                "urgency": result.get("urgency"),
-                "specialist": result.get("specialist"),
-                "confidence": result.get("confidence"),
-                "diagnosis": result.get("doctor_response"),
-                "reasons": result.get("reasons", []),
-                "actions": result.get("actions", [])
-            })
-    except Exception as e:
-        results.append({
-            "case": case_id,
-            "query": query,
-            "ok": False,
-            "urgency": None,
-            "specialist": None,
-            "confidence": None,
-            "diagnosis": None,
-            "reasons": [],
-            "actions": [],
-            "error": str(e)
-        })
+                "error": str(e),
+            }
+        )
 
 # Print JSON output
 print(json.dumps(results, indent=2))

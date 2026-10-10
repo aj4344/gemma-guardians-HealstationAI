@@ -6,6 +6,7 @@ and reports, per file, whether the pixel data decodes and how long it takes.
 
 Usage: python scripts/spikes/spike04_dicom.py [--json out.json]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -18,16 +19,16 @@ import pydicom
 from pydicom.data import get_testdata_file
 
 SAMPLES = [
-    "CT_small.dcm",                    # CT, explicit VR little endian (uncompressed)
-    "MR_small_implicit.dcm",           # implicit VR little endian
-    "MR_small_bigendian.dcm",          # explicit VR big endian (retired, still seen)
-    "MR_small_RLE.dcm",                # RLE lossless
-    "MR_small_jpeg_ls_lossless.dcm",   # JPEG-LS lossless
-    "MR_small_jp2klossless.dcm",       # JPEG 2000 lossless
-    "JPEG2000.dcm",                    # JPEG 2000 (lossy)
-    "JPEG-lossy.dcm",                  # JPEG extended (process 2/4)
-    "SC_rgb_jpeg_dcmtk.dcm",           # JPEG baseline, RGB secondary capture
-    "image_dfl.dcm",                   # deflated explicit VR little endian
+    "CT_small.dcm",  # CT, explicit VR little endian (uncompressed)
+    "MR_small_implicit.dcm",  # implicit VR little endian
+    "MR_small_bigendian.dcm",  # explicit VR big endian (retired, still seen)
+    "MR_small_RLE.dcm",  # RLE lossless
+    "MR_small_jpeg_ls_lossless.dcm",  # JPEG-LS lossless
+    "MR_small_jp2klossless.dcm",  # JPEG 2000 lossless
+    "JPEG2000.dcm",  # JPEG 2000 (lossy)
+    "JPEG-lossy.dcm",  # JPEG extended (process 2/4)
+    "SC_rgb_jpeg_dcmtk.dcm",  # JPEG baseline, RGB secondary capture
+    "image_dfl.dcm",  # deflated explicit VR little endian
 ]
 
 
@@ -42,7 +43,10 @@ def main() -> int:
             results["files"][name] = {"decoded": False, "reason": "sample not bundled"}
             continue
         dataset = pydicom.dcmread(path)
-        entry = {"transfer_syntax": dataset.file_meta.TransferSyntaxUID.name, "modality": str(dataset.get("Modality", ""))}
+        entry = {
+            "transfer_syntax": dataset.file_meta.TransferSyntaxUID.name,
+            "modality": str(dataset.get("Modality", "")),
+        }
         start = time.perf_counter()
         try:
             array = dataset.pixel_array

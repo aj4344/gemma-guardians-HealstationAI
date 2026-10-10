@@ -4,9 +4,9 @@ Part of the HealStation AI Emergency Triage System.
 All environment variables and runtime defaults are defined here.
 Import from this module; never call os.getenv() directly in other files.
 """
+
 import os
 from pathlib import Path
-from typing import List
 
 from dotenv import load_dotenv
 
@@ -44,7 +44,7 @@ def env_float(name: str, default: float) -> float:
         return default
 
 
-def env_list(name: str, default: List[str]) -> List[str]:
+def env_list(name: str, default: list[str]) -> list[str]:
     raw = os.getenv(name)
     if not raw or not raw.strip():
         return list(default)
@@ -66,7 +66,7 @@ MAX_REQUEST_MB = env_int("MAX_REQUEST_MB", 60)
 
 # ── Ollama / Gemma 4 ──────────────────────────────────────────────────────────
 OLLAMA_BASE_URL = env_str("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
-OLLAMA_MODEL    = env_str("OLLAMA_MODEL", "gemma4:e2b")
+OLLAMA_MODEL = env_str("OLLAMA_MODEL", "gemma4:e2b")
 # Lower-spec hardware alternative: set OLLAMA_MODEL=gemma2:2b in .env
 
 # Triage-call tuning. LOCAL_GEMMA_MODEL / LOCAL_GEMMA_URL are optional
@@ -82,10 +82,10 @@ FAIRNESS_PARITY_THRESHOLD = env_float("FAIRNESS_PARITY_THRESHOLD", 0.05)
 
 # ── Local STT (faster-whisper) ────────────────────────────────────────────────
 ENABLE_LOCAL_STT = env_bool("ENABLE_LOCAL_STT", True)
-STT_MODEL_SIZE  = env_str("LOCAL_STT_MODEL_SIZE", "small")
-STT_MODEL_PATH  = env_str("LOCAL_STT_MODEL_PATH", "")
-STT_DEVICE      = env_str("LOCAL_STT_DEVICE", "cpu")
-STT_COMPUTE     = env_str("LOCAL_STT_COMPUTE_TYPE", "int8")
+STT_MODEL_SIZE = env_str("LOCAL_STT_MODEL_SIZE", "small")
+STT_MODEL_PATH = env_str("LOCAL_STT_MODEL_PATH", "")
+STT_DEVICE = env_str("LOCAL_STT_DEVICE", "cpu")
+STT_COMPUTE = env_str("LOCAL_STT_COMPUTE_TYPE", "int8")
 STT_CPU_THREADS = env_int("LOCAL_STT_CPU_THREADS", 0)
 STT_NUM_WORKERS = env_int("LOCAL_STT_NUM_WORKERS", 1)
 STT_LOCAL_FILES_ONLY = env_bool("LOCAL_STT_LOCAL_FILES_ONLY", True)

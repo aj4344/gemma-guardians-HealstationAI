@@ -1,0 +1,46 @@
+# Tool configuration only; HealStation AI is run from source, not installed.
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = ["frontend", "*.md"]
+
+[tool.ruff.lint]
+# E/W pycodestyle, F pyflakes, I isort, B bugbear, S bandit (security),
+# UP pyupgrade, LOG/G logging hygiene, T20 no print() in library code.
+select = ["E", "W", "F", "I", "B", "S", "UP", "LOG", "G", "T20"]
+ignore = [
+    "E501",   # long lines: the formatter handles code; long strings are clinical text
+    "S101",   # assert is used in tests
+]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI parameter declarations are evaluated once by design.
+extend-immutable-calls = [
+    "fastapi.File", "fastapi.Form", "fastapi.Depends", "fastapi.Query",
+    "fastapi.Header", "fastapi.Cookie", "fastapi.Body", "fastapi.Path",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "T20", "B011"]
+"scripts/**" = ["T20", "S311", "S603", "S607"]
+"check_offline_ready.py" = ["T20", "E402"]
+"benchmark_offline.py" = ["T20", "E402"]
+"download_stt_model.py" = ["T20"]
+
+[tool.ruff.format]
+quote-style = "preserve"
+
+[tool.coverage.run]
+source = ["healstation"]
+branch = true
+
+[tool.coverage.report]
+skip_empty = true
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+warn_unused_ignores = true
+no_implicit_optional = true
+check_untyped_defs = true

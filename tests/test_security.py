@@ -1,4 +1,5 @@
 """Regression tests for security and privacy behaviour."""
+
 import logging
 
 from fastapi.testclient import TestClient

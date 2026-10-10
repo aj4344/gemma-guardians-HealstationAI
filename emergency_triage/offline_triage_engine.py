@@ -5,8 +5,7 @@ This module provides a canonical triage schema:
 urgency, reasons, actions, specialist, confidence
 """
 
-from typing import Any, Dict, List, Optional, Tuple
-
+from typing import Any
 
 ALLOWED_URGENCY = {"low", "medium", "high"}
 DEFAULT_SPECIALIST = "general"
@@ -53,7 +52,7 @@ def normalize_urgency(value: Any) -> str:
     return _URGENCY_MAPPING.get(text, "low")
 
 
-def ensure_list(value: Any) -> List[str]:
+def ensure_list(value: Any) -> list[str]:
     """Always return a list of non-empty strings."""
     if value is None:
         return []
@@ -63,7 +62,7 @@ def ensure_list(value: Any) -> List[str]:
     else:
         items = [value]
 
-    normalized_items: List[str] = []
+    normalized_items: list[str] = []
     for item in items:
         text = str(item).strip()
         if text:
@@ -89,7 +88,7 @@ def normalize_confidence(value: Any, default: float = DEFAULT_CONFIDENCE) -> flo
     return confidence
 
 
-def normalize_triage(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def normalize_triage(payload: dict[str, Any] | None) -> dict[str, Any]:
     """Return canonical triage payload with safe defaults."""
     payload = payload or {}
 
@@ -114,7 +113,7 @@ def normalize_triage(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def normalize_and_validate_local_triage(payload: Optional[Dict[str, Any]]) -> Tuple[Dict[str, Any], bool]:
+def normalize_and_validate_local_triage(payload: dict[str, Any] | None) -> tuple[dict[str, Any], bool]:
     """
     Normalize local model output and determine if it is structurally valid.
 
@@ -149,10 +148,10 @@ def normalize_and_validate_local_triage(payload: Optional[Dict[str, Any]]) -> Tu
 
 
 def select_offline_first_triage(
-    local_payload: Optional[Dict[str, Any]],
-    emergency_payload: Optional[Dict[str, Any]],
+    local_payload: dict[str, Any] | None,
+    emergency_payload: dict[str, Any] | None,
     confidence_threshold: float,
-) -> Tuple[Dict[str, Any], str]:
+) -> tuple[dict[str, Any], str]:
     """
     Local-first selection:
     1) local model when valid and confidence >= threshold

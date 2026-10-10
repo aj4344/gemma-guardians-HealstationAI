@@ -6,10 +6,11 @@ HealStation AI — Brain of the Doctor (Gemma 4 via Ollama)
 Part of the HealStation AI Emergency Triage System.
 Provides local offline AI inference using Gemma 4 (gemma4:e2b) via Ollama.
 """
-import os
+
+import base64
 import json
 import logging
-import base64
+import os
 
 from config import OLLAMA_BASE_URL, OLLAMA_MODEL
 
@@ -59,7 +60,7 @@ Based on your medical analysis, provide a detailed professional consultation AND
 
 **Specialist Recommendation Guidelines:**
 - For skin conditions (acne, rashes, moles, dermatitis): "dermatologist"
-- For heart/cardiovascular issues: "cardiologist"  
+- For heart/cardiovascular issues: "cardiologist"
 - For bone/joint/muscle problems: "orthopedic"
 - For eye/vision problems: "ophthalmologist"
 - For brain/neurological issues: "neurologist"
@@ -76,7 +77,6 @@ SPECIALIST_RECOMMENDATION: [specialist_type]
 URGENCY_LEVEL: [low/medium/high]
 
 Start your response with "Based on my examination of your medical documents and symptoms, I can observe..." and provide a complete, professional medical assessment. Do not use markdown formatting.""",
-
     "hi": """आप एक अनुभवी ट्राइएज नर्स और चिकित्सा डॉक्टर हैं जो पेशेवर चिकित्सा परामर्श और प्रारंभिक मूल्यांकन प्रदान कर रहे हैं। प्रदान किए गए चिकित्सा चित्रों और रोगी के लक्षणों का पूरी तरह से विश्लेषण करें।
 
 महत्वपूर्ण निर्देश:
@@ -112,7 +112,6 @@ SPECIALIST_RECOMMENDATION: [specialist_type]
 URGENCY_LEVEL: [low/medium/high]
 
 अपनी प्रतिक्रिया की शुरुआत "आपके चिकित्सा दस्तावेजों और लक्षणों की मेरी जांच के आधार पर मैं देख सकता हूं" से करें और एक संपूर्ण पेशेवर चिकित्सा मूल्यांकन प्रदान करें। कृपया कोई भी तारकीचे चिन्ह हैशटैग या विशेष फॉर्मेटिंग चिन्ह का उपयोग न करें क्योंकि यह ऑडियो में समस्याएं पैदा करता है।""",
-
     "mr": """तुम्ही एक अनुभवी ट्राइएज नर्स आणि वैद्यकीय डॉक्टर आहात जे व्यावसायिक वैद्यकीय सल्ला आणि प्राथमिक मूल्यांकन देत आहात. प्रदान केलेल्या वैद्यकीय प्रतिमा आणि रुग्णाच्या लक्षणांचे सखोल विश्लेषण करा.
 
 महत्त्वाच्या सूचना:
@@ -127,7 +126,7 @@ URGENCY_LEVEL: [low/medium/high]
 
 रुग्णाची लक्षणे आणि चिंता समजावून घेताना कृपया खालील सामान्य चुकांकडे लक्ष द्या:
 - "माला" म्हणजे "मला" (मला)
-- "चांदात" म्हणजे संभवतः "छातीत" किंवा "अंगात"  
+- "चांदात" म्हणजे संभवतः "छातीत" किंवा "अंगात"
 - "काई जाले" म्हणजे "काय झाले" (काय समस्या आहे)
 - "बगुन" म्हणजे "आज" किंवा "बघून"
 
@@ -153,8 +152,9 @@ URGENCY_LEVEL: [low/medium/high]
 SPECIALIST_RECOMMENDATION: [specialist_type]
 URGENCY_LEVEL: [low/medium/high]
 
-तुमच्या प्रतिसादाची सुरुवात "तुमच्या वैद्यकीय कागदपत्रे आणि लक्षणांच्या माझ्या तपासणीच्या आधारावर मी पाहू शकतो" असे करा आणि एक संपूर्ण व्यावसायिक वैद्यकीय मूल्यांकन द्या. कृपया कोणतेही तारकीचे चिन्ह हॅशटॅग किंवा विशेष फॉर्मॅटिंग चिन्हे वापरू नका कारण हे ऑडिओमध्ये अडचणी निर्माण करते."""
+तुमच्या प्रतिसादाची सुरुवात "तुमच्या वैद्यकीय कागदपत्रे आणि लक्षणांच्या माझ्या तपासणीच्या आधारावर मी पाहू शकतो" असे करा आणि एक संपूर्ण व्यावसायिक वैद्यकीय मूल्यांकन द्या. कृपया कोणतेही तारकीचे चिन्ह हॅशटॅग किंवा विशेष फॉर्मॅटिंग चिन्हे वापरू नका कारण हे ऑडिओमध्ये अडचणी निर्माण करते.""",
 }
+
 
 def get_system_prompt(language_code="en"):
     """Get the language-specific consultation system prompt."""
@@ -192,7 +192,7 @@ def get_gemma_response(patient_text: str, language: str = "en", vitals: dict = N
         start = content.find("{")
         end = content.rfind("}")
         if start != -1 and end != -1:
-            return json.loads(content[start:end + 1])
+            return json.loads(content[start : end + 1])
         return {"error": "Could not parse JSON from model output", "raw": content}
     except Exception as exc:
         logger.error("Gemma triage call failed: %s", exc)
@@ -204,8 +204,9 @@ def get_doctor_advice_multimodal(patient_input, image_data_list=None, pdf_data_l
     Get medical consultation from Gemma 4 via Ollama, optionally including PDF text.
     Image analysis is text-described since Gemma 4 runs locally without vision endpoints.
     """
-    import requests
     import tempfile
+
+    import requests
 
     system_prompt = get_system_prompt(language).replace("[PATIENT_INPUT]", patient_input)
     user_content = system_prompt
@@ -213,6 +214,7 @@ def get_doctor_advice_multimodal(patient_input, image_data_list=None, pdf_data_l
     if pdf_data_list:
         try:
             import PyPDF2
+
             for i, pdf_info in enumerate(pdf_data_list):
                 try:
                     pdf_name = pdf_info.get("name", f"document_{i + 1}.pdf")
@@ -268,18 +270,32 @@ def extract_specialist_recommendation(doctor_response: str) -> dict:
             for sep in (" or ", " and "):
                 if sep in specialist_recommendation:
                     parts = [p.strip() for p in specialist_recommendation.split(sep)]
-                    valid = {"dermatologist", "cardiologist", "orthopedic", "neurologist",
-                             "pediatrician", "gynecologist", "psychiatrist", "ophthalmologist",
-                             "pulmonologist", "urologist", "nephrologist"}
+                    valid = {
+                        "dermatologist",
+                        "cardiologist",
+                        "orthopedic",
+                        "neurologist",
+                        "pediatrician",
+                        "gynecologist",
+                        "psychiatrist",
+                        "ophthalmologist",
+                        "pulmonologist",
+                        "urologist",
+                        "nephrologist",
+                    }
                     specialist_recommendation = next((p for p in parts if p in valid), parts[0] if parts else "general")
                     break
         else:
             resp_lower = doctor_response.lower()
             scores = {
                 "dermatology": 10 if any(w in resp_lower for w in ["skin", "acne", "rash", "dermatologist"]) else 0,
-                "cardiology": 10 if any(w in resp_lower for w in ["heart", "cardiac", "chest pain", "cardiologist"]) else 0,
+                "cardiology": 10
+                if any(w in resp_lower for w in ["heart", "cardiac", "chest pain", "cardiologist"])
+                else 0,
                 "urology": 15 if any(w in resp_lower for w in ["kidney stone", "bladder", "urologist"]) else 0,
-                "nephrology": 10 if any(w in resp_lower for w in ["kidney disease", "kidney failure", "nephrologist"]) else 0,
+                "nephrology": 10
+                if any(w in resp_lower for w in ["kidney disease", "kidney failure", "nephrologist"])
+                else 0,
                 "ophthalmology": 10 if any(w in resp_lower for w in ["eye", "vision", "ophthalmologist"]) else 0,
                 "orthopedics": 10 if any(w in resp_lower for w in ["bone", "joint", "fracture", "orthopedic"]) else 0,
                 "general": 0,
@@ -291,17 +307,26 @@ def extract_specialist_recommendation(doctor_response: str) -> dict:
             raw_urgency = doctor_response.split("URGENCY_LEVEL:")[1].split("\n")[0]
             urgency_level = raw_urgency.lower().strip("*# \t").replace("**", "").replace("*", "")
 
-        clean_response = doctor_response.split("SPECIALIST_RECOMMENDATION:")[0].strip() \
-            if "SPECIALIST_RECOMMENDATION:" in doctor_response else doctor_response
+        clean_response = (
+            doctor_response.split("SPECIALIST_RECOMMENDATION:")[0].strip()
+            if "SPECIALIST_RECOMMENDATION:" in doctor_response
+            else doctor_response
+        )
 
         logger.info("Specialist: %s | Urgency: %s", specialist_recommendation, urgency_level)
-        return {"clean_response": clean_response, "specialist_recommendation": specialist_recommendation,
-                "urgency_level": urgency_level}
+        return {
+            "clean_response": clean_response,
+            "specialist_recommendation": specialist_recommendation,
+            "urgency_level": urgency_level,
+        }
 
     except Exception as exc:
         logger.error("extract_specialist_recommendation failed: %s", exc)
-        return {"clean_response": doctor_response, "specialist_recommendation": specialist_recommendation,
-                "urgency_level": urgency_level}
+        return {
+            "clean_response": doctor_response,
+            "specialist_recommendation": specialist_recommendation,
+            "urgency_level": urgency_level,
+        }
 
 
 def get_doctor_response(patient_message, image_data=None, pdf_data=None, language="en"):
@@ -336,6 +361,7 @@ def encode_image(image_path: str):
     except Exception as exc:
         logger.error("Error encoding image: %s", exc)
         return None
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

@@ -6,9 +6,7 @@ import api
 
 
 def test_trigger_hit_case_returns_emergency_action_block_data():
-    red_flag = api._evaluate_red_flag_guardrail(
-        "Severe chest pain with sweating and pain radiating to left arm."
-    )
+    red_flag = api._evaluate_red_flag_guardrail("Severe chest pain with sweating and pain radiating to left arm.")
 
     assert red_flag["apply_guardrail"] is True
     assert "cardiac" in red_flag["matched_categories"]
@@ -29,18 +27,14 @@ def test_non_trigger_case_does_not_force_emergency_block():
 
 
 def test_negated_red_flag_phrase_does_not_trigger_guardrail():
-    red_flag = api._evaluate_red_flag_guardrail(
-        "No chest pain, mild cough for two days."
-    )
+    red_flag = api._evaluate_red_flag_guardrail("No chest pain, mild cough for two days.")
 
     assert red_flag["apply_guardrail"] is False
     assert red_flag["matched_categories"] == []
 
 
 def test_ambiguous_case_defaults_to_conservative_guidance():
-    red_flag = api._evaluate_red_flag_guardrail(
-        "Maybe chest tightness, not sure if serious, could be chest pain."
-    )
+    red_flag = api._evaluate_red_flag_guardrail("Maybe chest tightness, not sure if serious, could be chest pain.")
 
     assert red_flag["apply_guardrail"] is True
     assert red_flag["ambiguous"] is True
@@ -52,9 +46,7 @@ def test_ambiguous_case_defaults_to_conservative_guidance():
 
 
 def test_hindi_red_flag_triggers_guardrail_and_localization():
-    red_flag = api._evaluate_red_flag_guardrail(
-        "मुझे सीने में दबाव है और बाएं हाथ में दर्द है।"
-    )
+    red_flag = api._evaluate_red_flag_guardrail("मुझे सीने में दबाव है और बाएं हाथ में दर्द है।")
 
     assert red_flag["apply_guardrail"] is True
     assert "cardiac" in red_flag["matched_categories"]
@@ -71,9 +63,7 @@ def test_hindi_red_flag_triggers_guardrail_and_localization():
 
 
 def test_marathi_red_flag_triggers_guardrail_and_localization():
-    red_flag = api._evaluate_red_flag_guardrail(
-        "छातीत दडपण आहे आणि डाव्या हातात वेदना आहे."
-    )
+    red_flag = api._evaluate_red_flag_guardrail("छातीत दडपण आहे आणि डाव्या हातात वेदना आहे.")
 
     assert red_flag["apply_guardrail"] is True
     assert "cardiac" in red_flag["matched_categories"]
@@ -143,14 +133,18 @@ def test_local_gemma_preferred_when_valid(monkeypatch):
     }
 
     monkeypatch.setattr(api, "_run_local_gemma_triage", lambda *args, **kwargs: local_payload)
-    monkeypatch.setattr(api, "_build_emergency_fallback_triage", lambda *args, **kwargs: {
-        "urgency": "high",
-        "reasons": ["Fallback triggered."],
-        "actions": ["Seek emergency care."],
-        "specialist": "emergency medicine",
-        "confidence": 0.2,
-        "doctor_response": "Emergency fallback response.",
-    })
+    monkeypatch.setattr(
+        api,
+        "_build_emergency_fallback_triage",
+        lambda *args, **kwargs: {
+            "urgency": "high",
+            "reasons": ["Fallback triggered."],
+            "actions": ["Seek emergency care."],
+            "specialist": "emergency medicine",
+            "confidence": 0.2,
+            "doctor_response": "Emergency fallback response.",
+        },
+    )
     monkeypatch.setattr(api, "text_to_speech_for_api", lambda *args, **kwargs: None)
 
     response = client.post(
@@ -187,9 +181,13 @@ def test_tts_disabled_skips_audio_generation(monkeypatch):
 
     monkeypatch.setattr(api, "_run_local_gemma_triage", lambda *args, **kwargs: local_payload)
     monkeypatch.setattr(api, "_build_emergency_fallback_triage", lambda *args, **kwargs: None)
-    monkeypatch.setattr(api, "text_to_speech_for_api", lambda *args, **kwargs: (_ for _ in ()).throw(
-        AssertionError("TTS should not run when LOCAL_TTS_ENABLED is false")
-    ))
+    monkeypatch.setattr(
+        api,
+        "text_to_speech_for_api",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("TTS should not run when LOCAL_TTS_ENABLED is false")
+        ),
+    )
 
     response = client.post(
         "/api/get-doctor-response",

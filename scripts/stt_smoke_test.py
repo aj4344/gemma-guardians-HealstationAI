@@ -2,6 +2,7 @@
 Offline faster-whisper STT smoke test.
 Usage: python scripts/stt_smoke_test.py --en path.wav --hi path.webm --mr path.wav
 """
+
 import argparse
 import os
 import sys
@@ -9,7 +10,6 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from voice_of_the_patient import transcribe_audio
-
 
 LANGUAGE_LABELS = {
     "en": "English",

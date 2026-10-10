@@ -4,7 +4,14 @@ Quick verification that the offline stack is ready:
 - Ollama/Gemma reachable at port 11434
 - Safety guardrail triggers for emergency symptoms
 """
-import sys, os, time, requests, io
+
+import io
+import os
+import sys
+import time
+
+import requests
+
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
@@ -16,7 +23,12 @@ all_ok = True
 
 sys.path.insert(0, ".")
 from config import (
-    LOCAL_GEMMA_MODEL, OLLAMA_BASE_URL, STT_COMPUTE, STT_DEVICE, STT_MODEL_PATH, STT_MODEL_SIZE,
+    LOCAL_GEMMA_MODEL,
+    OLLAMA_BASE_URL,
+    STT_COMPUTE,
+    STT_DEVICE,
+    STT_MODEL_PATH,
+    STT_MODEL_SIZE,
 )
 
 # --- 1. Whisper STT -----------------------------------------
@@ -24,9 +36,10 @@ stt_model = STT_MODEL_PATH or STT_MODEL_SIZE
 print(f"\n[1/3] Speech-to-Text (faster-whisper {stt_model})...")
 try:
     from faster_whisper import WhisperModel
+
     t = time.time()
     m = WhisperModel(stt_model, device=STT_DEVICE, compute_type=STT_COMPUTE, local_files_only=True)
-    print(f"      [OK] Loaded in {time.time()-t:.1f}s (no internet used)")
+    print(f"      [OK] Loaded in {time.time() - t:.1f}s (no internet used)")
 except Exception as e:
     print(f"      [FAIL] {e}")
     print("         -> Fix: run 'python download_stt_model.py' once while online")
@@ -53,9 +66,10 @@ except Exception as e:
 print("\n[3/3] Safety guardrail (no internet needed)...")
 try:
     from api import _evaluate_red_flag_guardrail
+
     result = _evaluate_red_flag_guardrail("I have pain in my heart and breathlessness")
     if result["apply_guardrail"]:
-        print(f"      [OK] CRITICAL override triggered correctly")
+        print("      [OK] CRITICAL override triggered correctly")
         print(f"           Categories: {result['matched_categories']}")
     else:
         print("      [FAIL] guardrail did NOT trigger for cardiac symptoms")

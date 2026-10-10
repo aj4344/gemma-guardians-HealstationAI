@@ -6,9 +6,7 @@ import api
 
 
 def test_trigger_hit_case_returns_toxin_fast_lane_block_data():
-    toxin_flag = api._evaluate_toxin_fast_lane(
-        "I drank bleach by mistake and now I feel sick."
-    )
+    toxin_flag = api._evaluate_toxin_fast_lane("I drank bleach by mistake and now I feel sick.")
 
     assert toxin_flag["apply_fast_lane"] is True
     assert "ingestion" in toxin_flag["matched_categories"]
@@ -25,9 +23,7 @@ def test_trigger_hit_case_returns_toxin_fast_lane_block_data():
 
 
 def test_bleach_ingestion_phrase_triggers_toxin_fast_lane():
-    toxin_flag = api._evaluate_toxin_fast_lane(
-        "Bleach ingestion about 10 minutes ago."
-    )
+    toxin_flag = api._evaluate_toxin_fast_lane("Bleach ingestion about 10 minutes ago.")
 
     assert toxin_flag["apply_fast_lane"] is True
     assert "ingestion" in toxin_flag["matched_categories"]
@@ -43,9 +39,7 @@ def test_non_trigger_case_does_not_force_toxin_fast_lane():
 
 
 def test_ambiguous_toxin_case_defaults_to_conservative_guidance():
-    toxin_flag = api._evaluate_toxin_fast_lane(
-        "Maybe I inhaled some gas leak fumes, not sure if it was toxic."
-    )
+    toxin_flag = api._evaluate_toxin_fast_lane("Maybe I inhaled some gas leak fumes, not sure if it was toxic.")
 
     assert toxin_flag["apply_fast_lane"] is True
     assert toxin_flag["ambiguous"] is True
@@ -57,9 +51,7 @@ def test_ambiguous_toxin_case_defaults_to_conservative_guidance():
 
 
 def test_hindi_toxin_phrase_triggers_fast_lane_and_localization():
-    toxin_flag = api._evaluate_toxin_fast_lane(
-        "मैंने गलती से ब्लीच पी लिया है और गला जल रहा है।"
-    )
+    toxin_flag = api._evaluate_toxin_fast_lane("मैंने गलती से ब्लीच पी लिया है और गला जल रहा है।")
 
     assert toxin_flag["apply_fast_lane"] is True
     assert "ingestion" in toxin_flag["matched_categories"]
@@ -76,9 +68,7 @@ def test_hindi_toxin_phrase_triggers_fast_lane_and_localization():
 
 
 def test_marathi_toxin_phrase_triggers_fast_lane_and_localization():
-    toxin_flag = api._evaluate_toxin_fast_lane(
-        "मी चुकून ब्लीच पिले आणि घसा जळत आहे."
-    )
+    toxin_flag = api._evaluate_toxin_fast_lane("मी चुकून ब्लीच पिले आणि घसा जळत आहे.")
 
     assert toxin_flag["apply_fast_lane"] is True
     assert "ingestion" in toxin_flag["matched_categories"]
