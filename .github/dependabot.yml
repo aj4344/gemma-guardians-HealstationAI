@@ -1,0 +1,18 @@
+# Dependency update PRs (OPS-03). After merging a Python update, regenerate
+# the hash-pinned lockfiles with `sh scripts/lock_deps.sh`.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: "/frontend"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly

@@ -16,6 +16,8 @@ requests>=2.32.4           # >=2.32.4 fixes CVE-2024-47081 (.netrc credential le
 
 # ── Offline Speech-to-Text ────────────────────────────────
 faster-whisper>=1.1
+# onnxruntime (faster-whisper VAD) dropped Python 3.10 wheels in 1.24.
+onnxruntime<1.24 ; python_version < "3.11"
 
 # ── Offline Text-to-Speech ────────────────────────────────
 # Linux also needs the espeak-ng system package; macOS/Windows use built-in voices.
