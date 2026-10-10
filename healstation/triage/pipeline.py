@@ -23,6 +23,8 @@ logger = logging.getLogger("healstation")
 
 @dataclass
 class TriageOutcome:
+    """The decision plus where it came from; ``model_attempted`` is False on the rules-only path."""
+
     triage_data: dict[str, Any]
     triage_source: str
     specialist_recommendation: str
@@ -31,6 +33,8 @@ class TriageOutcome:
     emergency_action_block: dict[str, Any] | None = None
     # Vital signs after merging structured fields with values parsed from text.
     vitals: dict[str, float | None] = field(default_factory=dict)
+    model_attempted: bool = False
+    model_responded: bool = False
 
 
 VITAL_NAMES = ("heart_rate", "bp_systolic", "bp_diastolic", "spo2", "temperature")
@@ -46,6 +50,9 @@ def assess_symptoms(
     bp_diastolic: int | None = None,
     spo2: int | None = None,
     temperature: float | None = None,
+    respiratory_rate: float | None = None,
+    use_model: bool = True,
+    model_timeout: float | None = None,
 ) -> TriageOutcome:
     structured = {
         "heart_rate": heart_rate,
@@ -55,6 +62,7 @@ def assess_symptoms(
         "temperature": temperature,
     }
     emergency_action_block = None
+    model_attempted = model_responded = False
 
     # Step 4 fast-lane: evaluate toxin/poison exposure before any other triage flow.
     toxin_flag = toxin.evaluate_toxin_fast_lane(patient_text)
@@ -90,7 +98,12 @@ def assess_symptoms(
             }
 
             # Step 2: Local Gemma triage
-            local_triage_raw = model_client.run_local_gemma_triage(patient_text, language, **resolved_vitals)
+            local_triage_raw = (
+                model_client.run_local_gemma_triage(patient_text, language, **resolved_vitals, timeout=model_timeout)
+                if use_model
+                else None
+            )
+            model_attempted, model_responded = use_model, local_triage_raw is not None
 
             # Step 3: Emergency triage as fallback
             emergency_triage_raw = fallback.build_emergency_fallback_triage(
@@ -108,7 +121,9 @@ def assess_symptoms(
 
             # SAFETY FLOOR: critical vital signs always mean HIGH urgency,
             # whatever the model or the keyword classifier concluded.
-            vital_findings = vitals.critical_vital_findings(**resolved_vitals)
+            vital_findings = vitals.critical_vital_findings(
+                **resolved_vitals, respiratory_rate=respiratory_rate, language=language
+            )
             vitals_flag = None
             if vital_findings:
                 vitals_flag = {
@@ -162,4 +177,6 @@ def assess_symptoms(
         doctor_text=doctor_text,
         emergency_action_block=emergency_action_block,
         vitals=resolved_vitals,
+        model_attempted=model_attempted,
+        model_responded=model_responded,
     )

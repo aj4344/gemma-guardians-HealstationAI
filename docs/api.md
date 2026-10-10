@@ -46,6 +46,37 @@ the client's MIME type and extension must agree with it.
 message when rejected, and a de-identified `summary`. The original filename is never returned.
 `DELETE` removes the upload and everything derived from it.
 
+### Assessment
+
+`POST /api/v2/cases/{case_id}/assess`
+
+```json
+{"symptoms_confirmed": "text the worker confirmed", "language": "hi",
+ "vitals": {"heart_rate": 120, "bp_systolic": 85, "bp_diastolic": 60, "spo2": 90, "temperature": 38.5, "respiratory_rate": 28}}
+```
+
+The safety rules (toxin lane, red-flag guardrail, critical vitals) run immediately — no model, no queue —
+and the full assessment is queued:
+
+```json
+{"assessment_id": "…", "job_id": "…",
+ "fast_path": {"urgency": "high" | null, "rules_fired": ["red_flag_guardrail"], "reasons": ["…"],
+               "emergency_action_block": {…}}}
+```
+
+When no rule fires, `fast_path.urgency` is `null` with `status: "no_emergency_rule_triggered"` — never
+"low". When the queue is full the response is `429 QUEUE_FULL` with `Retry-After`, and it still contains
+`fast_path`. The full result's urgency is never lower than the fast path's.
+
+`GET /api/v2/cases/{case_id}/assessments` lists a case's assessments with their fast-path and full results.
+
+### Jobs
+
+`GET /api/v2/jobs/{job_id}` → `{status: QUEUED|RUNNING|SUCCEEDED|FAILED|TIMED_OUT|CANCELLED, stage,
+progress, error?, result?}`. A job that runs out of time ends `TIMED_OUT`; its `result` is the partial
+(rules-based) result with `"partial": true`. Jobs interrupted by a restart are retried once, then fail
+with `JOB_INTERRUPTED`.
+
 ## Version 1 (deprecated)
 
 ### 1. Core Health Endpoints

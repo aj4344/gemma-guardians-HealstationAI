@@ -109,24 +109,76 @@ def clamp_vital(value: float | None, low: float, high: float, as_int: bool = Tru
     return int(round(clamped)) if as_int else float(clamped)
 
 
+_CRITICAL_VITAL_TEXT = {
+    "en": {
+        "heart_rate": "Heart rate {value} BPM is in the critical range.",
+        "bp_systolic": "Systolic blood pressure {value} mmHg is in the critical range.",
+        "bp_diastolic": "Diastolic blood pressure {value} mmHg is in the critical range.",
+        "spo2": "Oxygen saturation {value}% is critically low.",
+        "temperature": "Temperature {value}°C is in the critical range.",
+        "respiratory_rate": "Breathing rate {value} per minute is in the critical range.",
+    },
+    "hi": {
+        "heart_rate": "हृदय गति {value} प्रति मिनट गंभीर सीमा में है।",
+        "bp_systolic": "सिस्टोलिक रक्तचाप {value} mmHg गंभीर सीमा में है।",
+        "bp_diastolic": "डायस्टोलिक रक्तचाप {value} mmHg गंभीर सीमा में है।",
+        "spo2": "ऑक्सीजन स्तर {value}% गंभीर रूप से कम है।",
+        "temperature": "तापमान {value}°C गंभीर सीमा में है।",
+        "respiratory_rate": "सांस की दर {value} प्रति मिनट गंभीर सीमा में है।",
+    },
+    "mr": {
+        "heart_rate": "हृदयाचे ठोके {value} प्रति मिनिट गंभीर मर्यादेत आहेत.",
+        "bp_systolic": "सिस्टोलिक रक्तदाब {value} mmHg गंभीर मर्यादेत आहे.",
+        "bp_diastolic": "डायस्टोलिक रक्तदाब {value} mmHg गंभीर मर्यादेत आहे.",
+        "spo2": "ऑक्सिजन पातळी {value}% गंभीरपणे कमी आहे.",
+        "temperature": "तापमान {value}°C गंभीर मर्यादेत आहे.",
+        "respiratory_rate": "श्वसन दर {value} प्रति मिनिट गंभीर मर्यादेत आहे.",
+    },
+}
+
+
+def critical_vital_names(
+    heart_rate: float | None = None,
+    bp_systolic: float | None = None,
+    bp_diastolic: float | None = None,
+    spo2: float | None = None,
+    temperature: float | None = None,
+    respiratory_rate: float | None = None,
+) -> list[tuple[str, float]]:
+    """(vital, value) for every reading in the critical range (emergency_triage.constants thresholds)."""
+    limits = VITAL_SIGNS_CRITICAL
+    critical = []
+    if heart_rate is not None and not limits["heart_rate_low"] <= heart_rate <= limits["heart_rate_high"]:
+        critical.append(("heart_rate", heart_rate))
+    if bp_systolic is not None and not limits["systolic_bp_low"] <= bp_systolic <= limits["systolic_bp_high"]:
+        critical.append(("bp_systolic", bp_systolic))
+    if bp_diastolic is not None and bp_diastolic > limits["diastolic_bp_high"]:
+        critical.append(("bp_diastolic", bp_diastolic))
+    if spo2 is not None and spo2 < limits["oxygen_saturation_low"]:
+        critical.append(("spo2", spo2))
+    if temperature is not None and not limits["temperature_low"] <= temperature <= limits["temperature_high"]:
+        critical.append(("temperature", temperature))
+    if respiratory_rate is not None and not (
+        limits["respiratory_rate_low"] <= respiratory_rate <= limits["respiratory_rate_high"]
+    ):
+        critical.append(("respiratory_rate", respiratory_rate))
+    return critical
+
+
 def critical_vital_findings(
     heart_rate: float | None = None,
     bp_systolic: float | None = None,
     bp_diastolic: float | None = None,
     spo2: float | None = None,
     temperature: float | None = None,
+    respiratory_rate: float | None = None,
+    language: str = "en",
 ) -> list[str]:
-    """Vital signs in the critical range (emergency_triage.constants thresholds)."""
-    limits = VITAL_SIGNS_CRITICAL
-    findings = []
-    if heart_rate is not None and not limits["heart_rate_low"] <= heart_rate <= limits["heart_rate_high"]:
-        findings.append(f"Heart rate {heart_rate:g} BPM is in the critical range.")
-    if bp_systolic is not None and not limits["systolic_bp_low"] <= bp_systolic <= limits["systolic_bp_high"]:
-        findings.append(f"Systolic blood pressure {bp_systolic:g} mmHg is in the critical range.")
-    if bp_diastolic is not None and bp_diastolic > limits["diastolic_bp_high"]:
-        findings.append(f"Diastolic blood pressure {bp_diastolic:g} mmHg is in the critical range.")
-    if spo2 is not None and spo2 < limits["oxygen_saturation_low"]:
-        findings.append(f"Oxygen saturation {spo2:g}% is critically low.")
-    if temperature is not None and not limits["temperature_low"] <= temperature <= limits["temperature_high"]:
-        findings.append(f"Temperature {temperature:g}°C is in the critical range.")
-    return findings
+    """Localized findings for every vital sign in the critical range."""
+    texts = _CRITICAL_VITAL_TEXT.get(language, _CRITICAL_VITAL_TEXT["en"])
+    return [
+        texts[name].format(value=f"{value:g}")
+        for name, value in critical_vital_names(
+            heart_rate, bp_systolic, bp_diastolic, spo2, temperature, respiratory_rate
+        )
+    ]

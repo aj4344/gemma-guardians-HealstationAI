@@ -14,7 +14,9 @@ from datetime import datetime
 from fastapi import Request
 
 from healstation.ingest.service import AttachmentService, StorageGuard
+from healstation.jobs.queue import JobQueue
 from healstation.settings import Settings
+from healstation.store.assessments import AssessmentStore
 from healstation.store.blobs import BlobStore
 from healstation.store.cases import CaseStore
 from healstation.store.crypto import KekSettings, load_kek
@@ -53,12 +55,24 @@ class Runtime:
         self.cases = CaseStore(self.db, self.keys, self.blobs, self.settings, clock=clock)
         self.storage = StorageGuard(self.settings, self.blobs.usage_bytes)
         self.attachments = AttachmentService(self.cases, self.settings, self.storage)
+        self.assessments = AssessmentStore(self.cases)
+        self.queue = JobQueue(self.cases, self.settings.pools, self.settings.max_queue_depth, clock=clock)
+        self._register_jobs()
         self._started = False
 
+    def _register_jobs(self) -> None:
+        from healstation.jobs.assessment import assessment_spec
+
+        self.queue.register("assess", assessment_spec(self))
+
     def start(self) -> None:
+        if self._started:
+            return
+        self.queue.start()
         self._started = True
 
     def stop(self) -> None:
+        self.queue.stop()
         self._started = False
         self.db.dispose()
 

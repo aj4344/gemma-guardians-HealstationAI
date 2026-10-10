@@ -118,8 +118,12 @@ def run_local_gemma_triage(
     bp_diastolic: int | None = None,
     spo2: int | None = None,
     temperature: float | None = None,
+    timeout: float | None = None,
 ) -> dict[str, Any] | None:
-    """Try local Gemma via Ollama /api/chat (instruction-tuned endpoint)."""
+    """Try local Gemma via Ollama /api/chat (instruction-tuned endpoint).
+
+    ``timeout`` caps the HTTP call (a job passes its remaining deadline).
+    """
     if not ENABLE_LOCAL_TRIAGE:
         return None
     try:
@@ -148,7 +152,7 @@ def run_local_gemma_triage(
             },
         }
         logger.info("Calling Ollama model=%s num_ctx=%d", LOCAL_GEMMA_MODEL, LOCAL_GEMMA_NUM_CTX)
-        response = requests.post(chat_url, json=payload, timeout=LOCAL_GEMMA_TIMEOUT_SECONDS)
+        response = requests.post(chat_url, json=payload, timeout=timeout or LOCAL_GEMMA_TIMEOUT_SECONDS)
         response.raise_for_status()
 
         raw = response.json()
