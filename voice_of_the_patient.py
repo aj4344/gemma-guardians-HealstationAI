@@ -15,30 +15,28 @@ import shutil
 import tempfile
 from functools import lru_cache
 
-from config import STT_MODEL_SIZE, STT_DEVICE, STT_COMPUTE
+from config import (
+    ENABLE_LOCAL_STT,
+    STT_COMPUTE,
+    STT_CPU_THREADS,
+    STT_DEVICE,
+    STT_LOCAL_FILES_ONLY,
+    STT_MODEL_PATH,
+    STT_MODEL_SIZE,
+    STT_NUM_WORKERS,
+)
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# Re-export env vars consumed by api.py for backward compatibility
+# Re-export settings consumed by api.py for backward compatibility
 LOCAL_STT_MODEL_SIZE = STT_MODEL_SIZE
 LOCAL_STT_DEVICE = STT_DEVICE
 LOCAL_STT_COMPUTE_TYPE = STT_COMPUTE
-ENABLE_LOCAL_STT = True  # always enabled — no Groq fallback
 
-_LOCAL_STT_MODEL_PATH = os.getenv("LOCAL_STT_MODEL_PATH", "").strip()
-_LOCAL_STT_CPU_THREADS = int(os.getenv("LOCAL_STT_CPU_THREADS", "0") or 0)
-_LOCAL_STT_NUM_WORKERS = int(os.getenv("LOCAL_STT_NUM_WORKERS", "1") or 1)
-_LOCAL_STT_LOCAL_FILES_ONLY = True
-
-
-def _safe_bool_env(name: str, default: bool = False) -> bool:
-    raw = str(os.getenv(name, str(default))).strip().lower()
-    if raw in {"1", "true", "yes", "y", "on"}:
-        return True
-    if raw in {"0", "false", "no", "n", "off"}:
-        return False
-    return default
+_LOCAL_STT_MODEL_PATH = STT_MODEL_PATH
+_LOCAL_STT_CPU_THREADS = STT_CPU_THREADS
+_LOCAL_STT_NUM_WORKERS = max(STT_NUM_WORKERS, 1)
+_LOCAL_STT_LOCAL_FILES_ONLY = STT_LOCAL_FILES_ONLY
 
 
 def _normalize_language(language_code: str) -> str:
@@ -286,6 +284,7 @@ def transcribe_audio(audio_path, language_code="en"):
 
 if __name__ == "__main__":
     import sys
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     audio_filepath = sys.argv[1] if len(sys.argv) > 1 else "patient_voice_test_for_patient.wav"
     result = transcribe_audio_offline(audio_filepath)
     if result.startswith("ERROR"):

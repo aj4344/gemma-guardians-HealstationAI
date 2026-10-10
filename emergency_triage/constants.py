@@ -533,6 +533,8 @@ FAIRNESS_GENDER_GROUPS: List[str] = ["male", "female", "other"]
 
 FAIRNESS_LANGUAGE_GROUPS: Dict[str, str] = {
     "en": "English",
+    "hi": "Hindi",
+    "mr": "Marathi",
     "es": "Spanish",
     "fr": "French",
     "zh": "Mandarin",

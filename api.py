@@ -4,9 +4,10 @@ All clinical inference runs locally via Ollama (Gemma 4 gemma4:e2b).
 No patient data is transmitted to external servers.
 """
 
-from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any, Tuple
 import logging
@@ -17,9 +18,28 @@ import uuid
 import json
 import requests
 import re
+import tempfile
+from contextlib import asynccontextmanager
 
 # config loads .env before anything below reads the environment
-from config import OLLAMA_BASE_URL, OLLAMA_MODEL
+from config import (
+    API_HOST,
+    API_PORT,
+    AUDIO_OUTPUT_DIR,
+    AUDIO_RETENTION_SECONDS,
+    ENABLE_LOCAL_TRIAGE,
+    FAIRNESS_PARITY_THRESHOLD,
+    FRONTEND_DIST_DIR,
+    LOCAL_GEMMA_MODEL,
+    LOCAL_GEMMA_NUM_CTX,
+    LOCAL_GEMMA_NUM_PREDICT,
+    LOCAL_GEMMA_TIMEOUT_SECONDS,
+    LOCAL_GEMMA_URL,
+    LOCAL_TRIAGE_CONFIDENCE_THRESHOLD,
+    LOCAL_TTS_ENABLED,
+    MAX_AUDIO_UPLOAD_MB,
+    MAX_REQUEST_MB,
+)
 
 # Import core AI components
 from voice_of_the_doctor import text_to_speech_for_api, get_available_voices
@@ -55,12 +75,29 @@ logging.basicConfig(
 )
 logger = logging.getLogger("healstation")
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # Recordings from a previous run may hold patient data; purge stale ones.
+    cleanup_old_audio_files()
+    yield
+
+
 # Initialize FastAPI app
 app = FastAPI(
     title="HealStation AI — Emergency Triage API",
     description="Offline clinical triage powered by Gemma 4 (gemma4:e2b) via Ollama.",
-    version="2.0.0"
+    version="2.0.0",
+    lifespan=lifespan,
 )
+
+
+@app.middleware("http")
+async def limit_request_size(request: Request, call_next):
+    """Reject oversized bodies before they are read into memory."""
+    content_length = request.headers.get("content-length")
+    if content_length and content_length.isdigit() and int(content_length) > MAX_REQUEST_MB * 1024 * 1024:
+        return JSONResponse(status_code=413, content={"detail": f"Request body exceeds {MAX_REQUEST_MB} MB."})
+    return await call_next(request)
 
 # Configure CORS for frontend integration
 app.add_middleware(
@@ -72,24 +109,29 @@ app.add_middleware(
 )
 
 # Models for request/response
+MAX_TEXT_CHARS = 20_000
+MAX_ATTACHMENTS = 8
+
+
 class ConsultationRequest(BaseModel):
-    patient_text: str
-    typed_text: Optional[str] = None
-    transcription_text: Optional[str] = None
-    language: str = "en"
-    age: Optional[int] = None
-    gender: Optional[str] = None
+    patient_text: str = Field(..., min_length=1, max_length=MAX_TEXT_CHARS)
+    typed_text: Optional[str] = Field(None, max_length=MAX_TEXT_CHARS)
+    transcription_text: Optional[str] = Field(None, max_length=MAX_TEXT_CHARS)
+    language: str = Field("en", max_length=16)
+    age: Optional[int] = Field(None, ge=0, le=130)
+    gender: Optional[str] = Field(None, max_length=32)
     triage_correct: Optional[bool] = None
-    image_data: Optional[List[str]] = None
-    pdf_data: Optional[List[dict]] = None
+    image_data: Optional[List[str]] = Field(None, max_length=MAX_ATTACHMENTS)
+    pdf_data: Optional[List[dict]] = Field(None, max_length=MAX_ATTACHMENTS)
     image_count: Optional[int] = 0
     pdf_count: Optional[int] = 0
-    # Structured vital signs (optional — UI can send individual fields)
-    heart_rate: Optional[int] = None
-    bp_systolic: Optional[int] = None
-    bp_diastolic: Optional[int] = None
-    spo2: Optional[int] = None
-    temperature: Optional[float] = None
+    # Structured vital signs (optional — UI can send individual fields).
+    # Bounds only reject impossible values; critical readings stay accepted.
+    heart_rate: Optional[int] = Field(None, ge=0, le=400)
+    bp_systolic: Optional[int] = Field(None, ge=0, le=400)
+    bp_diastolic: Optional[int] = Field(None, ge=0, le=300)
+    spo2: Optional[int] = Field(None, ge=0, le=100)
+    temperature: Optional[float] = Field(None, ge=20, le=46)
 
 class ConsultationResponse(BaseModel):
     doctor_response: str
@@ -143,37 +185,8 @@ class CitySearchResponse(BaseModel):
     search_params: Dict[str, Any]
 
 
-def _safe_float_env(name: str, default: float) -> float:
-    try:
-        return float(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-
-
-def _safe_int_env(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-
-
-def _safe_bool_env(name: str, default: bool) -> bool:
-    raw = str(os.getenv(name, str(default))).strip().lower()
-    if raw in {"1", "true", "yes", "y", "on"}:
-        return True
-    if raw in {"0", "false", "no", "n", "off"}:
-        return False
-    return default
-
-
-LOCAL_GEMMA_MODEL = os.getenv("LOCAL_GEMMA_MODEL", "gemma4:e2b")
-LOCAL_GEMMA_URL = os.getenv("LOCAL_GEMMA_URL", "http://127.0.0.1:11434/api/generate")
-LOCAL_GEMMA_TIMEOUT_SECONDS = _safe_int_env("LOCAL_GEMMA_TIMEOUT_SECONDS", 120)
-LOCAL_GEMMA_NUM_CTX = _safe_int_env("LOCAL_GEMMA_NUM_CTX", 1024)
-LOCAL_GEMMA_NUM_PREDICT = _safe_int_env("LOCAL_GEMMA_NUM_PREDICT", 1400)
-LOCAL_TRIAGE_CONFIDENCE_THRESHOLD = _safe_float_env("LOCAL_TRIAGE_CONFIDENCE_THRESHOLD", 0.6)
-ENABLE_LOCAL_TRIAGE = _safe_bool_env("ENABLE_LOCAL_TRIAGE", True)
-FAIRNESS_PARITY_THRESHOLD = _safe_float_env("FAIRNESS_PARITY_THRESHOLD", 0.05)
+# Accept a legacy /api/generate URL from older .env files; triage uses /api/chat.
+LOCAL_GEMMA_CHAT_URL = LOCAL_GEMMA_URL.replace("/api/generate", "/api/chat")
 fairness_tracker = FairnessTracker(parity_threshold=FAIRNESS_PARITY_THRESHOLD)
 
 
@@ -415,7 +428,7 @@ def _run_local_gemma_triage(
             bp_diastolic=bp_diastolic, spo2=spo2, temperature=temperature,
         )
         # Use /api/chat — required for instruction-tuned models like gemma4:e2b
-        chat_url = LOCAL_GEMMA_URL.replace("/api/generate", "/api/chat")
+        chat_url = LOCAL_GEMMA_CHAT_URL
         payload = {
             "model": LOCAL_GEMMA_MODEL,
             "messages": [
@@ -1297,11 +1310,43 @@ def _compose_toxin_response_text(
         f"Call {ambulance} now and seek emergency care immediately."
     )
 
+_AUDIO_FILENAME_RE = re.compile(r"^doctor_response_[0-9a-f]{32}\.(?:wav|mp3)$")
+
+
+def _audio_path_for(filename: str) -> str:
+    """Resolve a generated-audio filename, rejecting anything we did not create."""
+    if not _AUDIO_FILENAME_RE.fullmatch(filename or ""):
+        raise HTTPException(status_code=404, detail="Audio file not found")
+    return os.path.join(AUDIO_OUTPUT_DIR, filename)
+
+
+def _generate_response_audio(text: str, language: str) -> Optional[str]:
+    """Speak the response with offline TTS; returns its URL or None."""
+    if not LOCAL_TTS_ENABLED:
+        return None
+    os.makedirs(AUDIO_OUTPUT_DIR, exist_ok=True)
+    # Random names: these files contain health information and are served
+    # without authentication, so they must not be guessable.
+    output_path = os.path.join(AUDIO_OUTPUT_DIR, f"doctor_response_{uuid.uuid4().hex}.wav")
+    try:
+        generated_path = text_to_speech_for_api(text=text, output_path=output_path, language=language)
+    except Exception:
+        logger.exception("TTS generation failed")
+        return None
+    if not generated_path or not os.path.exists(generated_path) or os.path.getsize(generated_path) == 0:
+        logger.warning("TTS: audio file missing or empty")
+        return None
+    return f"/api/audio/{os.path.basename(generated_path)}"
+
+
 # API Routes
 
-@app.get("/")
-def read_root():
-    return {"status": "healthy", "message": "HealStation AI: Doctor Assistant API is running"}
+_FRONTEND_BUILT = (FRONTEND_DIST_DIR / "index.html").is_file()
+
+if not _FRONTEND_BUILT:
+    @app.get("/")
+    def read_root():
+        return {"status": "healthy", "message": "HealStation AI: Doctor Assistant API is running"}
 
 @app.get("/api")
 def api_health_check():
@@ -1310,6 +1355,15 @@ def api_health_check():
 
 @app.get("/api/stt-health")
 def stt_health_check():
+    if not ENABLE_LOCAL_STT:
+        return {
+            "ready": False,
+            "mode": "offline",
+            "provider": "faster-whisper",
+            "model": LOCAL_STT_MODEL_SIZE,
+            "error": "Speech-to-text is disabled (ENABLE_LOCAL_STT=false).",
+            "languages": ["en", "hi", "mr"],
+        }
     try:
         _get_local_stt_model()
         return {
@@ -1337,21 +1391,20 @@ def ollama_status():
     Canonical Ollama status check for judges and CI.
     Returns offline_ready=true when Ollama is reachable and the model is loaded.
     """
-    chat_url = f"{OLLAMA_BASE_URL}/api/chat"
     try:
         ping = {
-            "model": OLLAMA_MODEL,
+            "model": LOCAL_GEMMA_MODEL,
             "messages": [{"role": "user", "content": "Reply with the single word: ok"}],
             "stream": False,
             "options": {"num_predict": 5},
         }
-        resp = requests.post(chat_url, json=ping, timeout=15)
+        resp = requests.post(LOCAL_GEMMA_CHAT_URL, json=ping, timeout=15)
         resp.raise_for_status()
-        return {"ollama": "connected", "model": OLLAMA_MODEL, "offline_ready": True}
+        return {"ollama": "connected", "model": LOCAL_GEMMA_MODEL, "offline_ready": True}
     except Exception as err:
         return {
             "ollama": "not running",
-            "model": OLLAMA_MODEL,
+            "model": LOCAL_GEMMA_MODEL,
             "offline_ready": False,
             "message": "Start Ollama: ollama serve",
             "error": str(err),
@@ -1361,7 +1414,7 @@ def ollama_status():
 @app.get("/api/ollama-health")
 def ollama_health_check():
     """Check whether Ollama is running and gemma4:e2b is reachable."""
-    chat_url = LOCAL_GEMMA_URL.replace("/api/generate", "/api/chat")
+    chat_url = LOCAL_GEMMA_CHAT_URL
     try:
         ping_payload = {
             "model": LOCAL_GEMMA_MODEL,
@@ -1387,31 +1440,57 @@ def ollama_health_check():
         }
 
 
+_STT_FAILED_MESSAGES = {
+    "en": "Could not transcribe the recording. Please try again or type the symptoms instead.",
+    "hi": "रिकॉर्डिंग को टेक्स्ट में नहीं बदला जा सका। कृपया फिर से प्रयास करें या लक्षण टाइप करें।",
+    "mr": "रेकॉर्डिंगचे मजकुरात रूपांतर करता आले नाही. कृपया पुन्हा प्रयत्न करा किंवा लक्षणे टाइप करा.",
+}
+
+
 @app.post("/api/transcribe-audio", response_model=TranscriptionResponse)
-async def transcribe_audio(audio: UploadFile = File(...), language: str = Form("en")):
+def transcribe_audio_endpoint(audio: UploadFile = File(...), language: str = Form("en")):
     """
-    Transcribe patient's voice recording to text
+    Transcribe patient's voice recording to text (offline, faster-whisper).
+    Sync handler: FastAPI runs it in a worker thread so CPU-bound decoding
+    does not block other requests.
     """
-    # Save the uploaded audio temporarily
-    temp_audio_path = f"temp_audio_{uuid.uuid4()}.wav"
-    with open(temp_audio_path, "wb") as temp_file:
-        temp_file.write(await audio.read())
-    
+    if not ENABLE_LOCAL_STT:
+        raise HTTPException(status_code=503, detail="Speech-to-text is disabled on this server.")
+
+    language = _normalize_language(language)
+    max_bytes = MAX_AUDIO_UPLOAD_MB * 1024 * 1024
+    temp_audio_path = None
     try:
-        # Process audio with the transcription function
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".audio") as temp_file:
+            temp_audio_path = temp_file.name
+            written = 0
+            while chunk := audio.file.read(1024 * 1024):
+                written += len(chunk)
+                if written > max_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Audio recording exceeds {MAX_AUDIO_UPLOAD_MB} MB.",
+                    )
+                temp_file.write(chunk)
+        if written == 0:
+            raise HTTPException(status_code=400, detail="Empty audio upload.")
+
         transcription = transcribe_audio(temp_audio_path, language_code=language)
         if str(transcription).startswith("ERROR:"):
-            raise HTTPException(status_code=503, detail=transcription)
+            # Details (decoder errors, file headers) go to the server log only.
+            logger.error("Transcription failed: %s", transcription)
+            raise HTTPException(status_code=503, detail=_localized_message(_STT_FAILED_MESSAGES, language))
         return {"text": transcription, "language": language}
     finally:
-        # Clean up the temporary file
-        if os.path.exists(temp_audio_path):
+        if temp_audio_path and os.path.exists(temp_audio_path):
             os.remove(temp_audio_path)
 
 @app.post("/api/get-doctor-response", response_model=ConsultationResponse)
-async def get_consultation(request: ConsultationRequest, background_tasks: BackgroundTasks):
+def get_consultation(request: ConsultationRequest, background_tasks: BackgroundTasks):
     """
-    Get doctor's AI response based on patient input
+    Get doctor's AI response based on patient input.
+    Sync handler: the Ollama call and TTS block, so FastAPI runs this in a
+    worker thread instead of stalling the event loop for every other request.
     """
     try:
         logger.info("Consultation request | lang=%s text_len=%d images=%d",
@@ -1553,8 +1632,8 @@ async def get_consultation(request: ConsultationRequest, background_tasks: Backg
                 confidence=triage_data.get("confidence"),
             )
             fairness_metrics = fairness_tracker.get_metrics()
-        except Exception as fairness_error:
-            print(f"[API DEBUG] Fairness tracking skipped due to error: {fairness_error}")
+        except Exception:
+            logger.exception("Fairness tracking skipped")
 
         consensus_explanation = _build_consensus_explanation(
             patient_text=request.patient_text,
@@ -1565,42 +1644,15 @@ async def get_consultation(request: ConsultationRequest, background_tasks: Backg
             final_urgency=triage_data.get("urgency", "low"),
         )
         
-        # Generate doctor's voice using offline pyttsx3
-        audio_filename = None
-        timestamp = int(time.time())
-        audio_filename = f"audio_outputs/doctor_response_{timestamp}.mp3"
-
-        # Ensure the audio_outputs directory exists
-        os.makedirs("audio_outputs", exist_ok=True)
-
-        # Generate speech synchronously to ensure it's complete
-        try:
-            logger.debug("TTS: generating %s", audio_filename)
-            generated_path = text_to_speech_for_api(
-                text=doctor_text,
-                output_path=audio_filename,
-                language=request.language
-            )
-            if generated_path:
-                audio_filename = generated_path
-
-                if audio_filename and os.path.exists(audio_filename) and os.path.getsize(audio_filename) > 0:
-                    logger.debug("TTS: audio ready (%d bytes)", os.path.getsize(audio_filename))
-                else:
-                    logger.warning("TTS: audio file missing or empty")
-                    audio_filename = None
-
-        except Exception as audio_error:
-            logger.error("TTS generation failed: %s", audio_error)
-            audio_filename = None
+        audio_url = _generate_response_audio(doctor_text, request.language)
 
         # Clean up old audio files in the background
         background_tasks.add_task(cleanup_old_audio_files)
-        
+
         # Return the response with the audio URL and specialist recommendation
         response_data = {
             "doctor_response": doctor_text,
-            "audio_url": f"/api/audio/{os.path.basename(audio_filename)}" if audio_filename else None,
+            "audio_url": audio_url,
             "specialist_recommendation": specialist_recommendation,
             "urgency_level": urgency_level,
             "urgency": triage_data["urgency"],
@@ -1628,40 +1680,21 @@ async def get_consultation(request: ConsultationRequest, background_tasks: Backg
         )
 
 @app.get("/api/audio/{filename}")
-async def get_audio(filename: str):
-    """
-    Retrieve generated audio file with CORS support
-    """
-    audio_path = os.path.join("audio_outputs", filename)
-    
-    # Check if file exists, if not wait a bit for background generation
-    max_wait_time = 10  # seconds
-    wait_interval = 0.5  # seconds
-    elapsed_time = 0
-    
-    while not os.path.exists(audio_path) and elapsed_time < max_wait_time:
-        time.sleep(wait_interval)
-        elapsed_time += wait_interval
-    
-    if not os.path.exists(audio_path):
-        raise HTTPException(status_code=404, detail="Audio file not found or still being generated")
+def get_audio(filename: str):
+    """Serve a generated response recording."""
+    audio_path = _audio_path_for(filename)
+    if not os.path.isfile(audio_path):
+        raise HTTPException(status_code=404, detail="Audio file not found")
 
-    ext = os.path.splitext(filename)[1].lower()
-    if ext == ".wav":
-        media_type = "audio/wav"
-    else:
-        media_type = "audio/mpeg"
-    
+    media_type = "audio/wav" if filename.endswith(".wav") else "audio/mpeg"
     return FileResponse(
         audio_path,
         media_type=media_type,
         headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET",
-            "Access-Control-Allow-Headers": "*",
-            "Cache-Control": "no-cache",
-            "Content-Disposition": "inline"
-        }
+            # Contains health information: never cache in shared caches.
+            "Cache-Control": "no-store",
+            "Content-Disposition": "inline",
+        },
     )
 
 @app.get("/api/voices")
@@ -1909,78 +1942,36 @@ async def search_doctors_by_city_endpoint(request: CitySearchRequest):
             }
         )
 
-@app.get("/api/doctor-details/{place_id}")
-async def get_doctor_details(place_id: str):
-    """
-    Get detailed information about a specific doctor
-    """
-    try:
-        # This would typically fetch more detailed information
-        # For now, return basic structure
-        return {
-            "place_id": place_id,
-            "detailed_info": "Coming soon",
-            "reviews": [],
-            "photos": [],
-            "additional_ratings": {}
-        }
-    except Exception as e:
-        raise HTTPException(status_code=404, detail="Doctor details not found")
-
 @app.get("/api/audio-status/{filename}")
-async def check_audio_status(filename: str):
+def check_audio_status(filename: str):
+    """Report whether a generated recording is available.
+
+    Audio is generated before the consultation response is returned, so a
+    file that exists is complete.
     """
-    Check if audio file is ready and return its status (optimized for speed)
-    """
-    audio_path = f"audio_outputs/{filename}"
-    
-    if not os.path.exists(audio_path):
+    audio_path = _audio_path_for(filename)
+    if not os.path.isfile(audio_path):
         return {"ready": False, "status": "generating", "file_size": 0}
-    
-    # Quick file size check
     file_size = os.path.getsize(audio_path)
     if file_size == 0:
         return {"ready": False, "status": "generating", "file_size": 0}
-    
-    # Shorter wait to check if file is still being written (optimized)
-    time.sleep(0.05)  # Reduced from 0.1 to 0.05
-    new_file_size = os.path.getsize(audio_path)
-    
-    if new_file_size != file_size:
-        # File is still being written
-        return {"ready": False, "status": "generating", "file_size": new_file_size}
-    
     return {"ready": True, "status": "ready", "file_size": file_size}
 
-# Utility Functions
-def generate_audio_background(text: str, output_path: str, language: str):
-    """
-    Generate audio in the background (non-blocking)
-    """
-    try:
-        generated_path = text_to_speech_for_api(
-            text=text,
-            output_path=output_path,
-            language=language
-        )
-        final_path = generated_path or output_path
-        print(f"[API DEBUG] Audio file generated: {final_path}")
-    except Exception as audio_error:
-        print(f"[API WARNING] Audio generation failed: {str(audio_error)}")
 
+# Utility Functions
 def cleanup_old_audio_files():
-    """
-    Remove audio files older than 1 hour to save space
-    """
-    current_time = time.time()
-    audio_dir = "audio_outputs"
-    
-    if os.path.exists(audio_dir):
-        for filename in os.listdir(audio_dir):
-            file_path = os.path.join(audio_dir, filename)
-            # If file is older than 1 hour (3600 seconds)
-            if os.path.isfile(file_path) and current_time - os.path.getmtime(file_path) > 3600:
+    """Delete generated recordings older than AUDIO_RETENTION_SECONDS."""
+    if not os.path.isdir(AUDIO_OUTPUT_DIR):
+        return
+    cutoff = time.time() - AUDIO_RETENTION_SECONDS
+    for filename in os.listdir(AUDIO_OUTPUT_DIR):
+        file_path = os.path.join(AUDIO_OUTPUT_DIR, filename)
+        try:
+            if os.path.isfile(file_path) and os.path.getmtime(file_path) < cutoff:
                 os.remove(file_path)
+        except OSError:
+            # Another request may have removed it concurrently.
+            pass
 
 
 # =============================================================================
@@ -2209,6 +2200,12 @@ async def health_check():
     }
 
 
+# Serve the built React app (frontend/dist) from the API when it exists, so a
+# deployment is a single offline process. Mounted last: API routes win.
+if _FRONTEND_BUILT:
+    app.mount("/", StaticFiles(directory=FRONTEND_DIST_DIR, html=True), name="frontend")
+
+
 # Run the server if executed directly
 if __name__ == "__main__":
-    uvicorn.run("api:app", host="127.0.0.1", port=8001, reload=False)
+    uvicorn.run("api:app", host=API_HOST, port=API_PORT, reload=False)

@@ -78,6 +78,13 @@ class FairnessTracker:
         self._language_aliases = {
             "en": "en",
             "english": "en",
+            "en-in": "en",
+            "hi": "hi",
+            "hindi": "hi",
+            "hi-in": "hi",
+            "mr": "mr",
+            "marathi": "mr",
+            "mr-in": "mr",
             "es": "es",
             "spanish": "es",
             "fr": "fr",

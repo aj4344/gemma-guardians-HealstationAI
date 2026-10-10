@@ -8,8 +8,13 @@ Uses pyttsx3 exclusively — fully offline, no network required.
 import logging
 import os
 import re
+import threading
 
 logger = logging.getLogger(__name__)
+
+# pyttsx3 shares one engine per process and its run loop is not re-entrant, so
+# concurrent API requests must not drive it at the same time.
+_TTS_LOCK = threading.Lock()
 
 
 def _try_local_tts(text: str, output_filepath: str, lang: str):
@@ -23,18 +28,19 @@ def _try_local_tts(text: str, output_filepath: str, lang: str):
         root, ext = os.path.splitext(output_filepath)
         local_output = output_filepath if ext.lower() == ".wav" else f"{root}.wav"
 
-        engine = pyttsx3.init()
-        if lang in {"hi", "mr"}:
-            voices = engine.getProperty("voices") or []
-            for voice in voices:
-                langs = getattr(voice, "languages", []) or []
-                lang_blob = " ".join([str(item) for item in langs]).lower()
-                if lang in lang_blob:
-                    engine.setProperty("voice", voice.id)
-                    break
+        with _TTS_LOCK:
+            engine = pyttsx3.init()
+            if lang in {"hi", "mr"}:
+                voices = engine.getProperty("voices") or []
+                for voice in voices:
+                    langs = getattr(voice, "languages", []) or []
+                    lang_blob = " ".join([str(item) for item in langs]).lower()
+                    if lang in lang_blob:
+                        engine.setProperty("voice", voice.id)
+                        break
 
-        engine.save_to_file(text, local_output)
-        engine.runAndWait()
+            engine.save_to_file(text, local_output)
+            engine.runAndWait()
 
         if os.path.exists(local_output) and os.path.getsize(local_output) > 0:
             logger.info("pyttsx3 TTS generated: %s", local_output)

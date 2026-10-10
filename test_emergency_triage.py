@@ -167,52 +167,40 @@ def test_emergency_classifier():
     print("✅ PASSED: Quick classify working")
 
 
-async def test_hospital_routing():
-    """Test hospital search"""
+def test_hospital_routing():
+    """Test offline hospital search (static database)"""
     print_header("TESTING HOSPITAL ROUTING SERVICE")
-    
+
     router = HospitalRoutingService()
-    
-    # Test Case 1: Search near Mumbai
+
     print("\n🏥 Test Case 1: Hospital Search - Mumbai")
     print("-" * 40)
-    
+
     request = HospitalSearchRequest(
         latitude=19.0760,  # Mumbai
         longitude=72.8777,
         radius_km=10,
         required_capabilities=["emergency_room", "24x7"]
     )
-    
-    try:
-        hospitals = await router.find_emergency_hospitals(request)
-        
-        print_result("Hospitals Found", len(hospitals))
-        
-        if hospitals:
-            for i, h in enumerate(hospitals[:3]):
-                print(f"\n  Hospital #{i+1}:")
-                print_result("Name", h.name, indent=2)
-                print_result("Distance", h.distance_text, indent=2)
-                print_result("Emergency Room", h.has_emergency_room, indent=2)
-                print_result("24/7", h.is_24x7, indent=2)
-                print_result("Source", h.source, indent=2)
-            
-            print("\n✅ PASSED: Hospital search working")
-        else:
-            print("\n⚠️ No hospitals found (API may be rate limited)")
-            print("   This is okay - static fallback will be used in production")
-            
-    except Exception as e:
-        print(f"\n⚠️ Hospital search error: {e}")
-        print("   Using static fallback...")
-        
-        # Test static fallback
-        static_hospitals = router._get_static_hospitals(19.0760, 72.8777, 50)
-        print_result("Static hospitals found", len(static_hospitals))
-        if static_hospitals:
-            print_result("First hospital", static_hospitals[0].name)
-        print("✅ PASSED: Static fallback working")
+    hospitals = asyncio.run(router.find_emergency_hospitals(request))
+
+    print_result("Hospitals Found", len(hospitals))
+    assert hospitals, "Expected static Mumbai hospitals within 10 km"
+    assert all(h.has_emergency_room for h in hospitals)
+    assert all(h.distance_km <= 10 for h in hospitals)
+    scores = [h.match_score for h in hospitals]
+    assert scores == sorted(scores, reverse=True), "Hospitals must be sorted by match score"
+
+    for i, h in enumerate(hospitals[:3]):
+        print(f"\n  Hospital #{i+1}:")
+        print_result("Name", h.name, indent=2)
+        print_result("Distance", h.distance_text, indent=2)
+        print_result("Source", h.source, indent=2)
+
+    print("\n🏥 Test Case 2: Remote location - no static coverage")
+    remote = HospitalSearchRequest(latitude=34.15, longitude=77.58, radius_km=10)  # Leh
+    assert asyncio.run(router.find_emergency_hospitals(remote)) == []
+    print("\n✅ PASSED: Hospital search working")
 
 
 def test_vital_signs():
@@ -262,8 +250,7 @@ def run_all_tests():
         test_emergency_classifier()
         test_vital_signs()
         
-        # Run async tests
-        asyncio.run(test_hospital_routing())
+        test_hospital_routing()
         
         # Summary
         print_header("TEST SUMMARY")

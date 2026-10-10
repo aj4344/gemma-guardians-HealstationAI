@@ -171,10 +171,10 @@ def test_local_gemma_preferred_when_valid(monkeypatch):
     assert payload["doctor_response"] == "Local Gemma summary response."
 
 
-def test_offline_mode_skips_cloud_and_tts(monkeypatch):
+def test_tts_disabled_skips_audio_generation(monkeypatch):
     client = TestClient(api.app)
 
-    monkeypatch.setattr(api, "OFFLINE_MODE", True)
+    monkeypatch.setattr(api, "LOCAL_TTS_ENABLED", False)
 
     local_payload = {
         "urgency": "medium",
@@ -188,7 +188,7 @@ def test_offline_mode_skips_cloud_and_tts(monkeypatch):
     monkeypatch.setattr(api, "_run_local_gemma_triage", lambda *args, **kwargs: local_payload)
     monkeypatch.setattr(api, "_build_emergency_fallback_triage", lambda *args, **kwargs: None)
     monkeypatch.setattr(api, "text_to_speech_for_api", lambda *args, **kwargs: (_ for _ in ()).throw(
-        AssertionError("TTS should not run in OFFLINE_MODE")
+        AssertionError("TTS should not run when LOCAL_TTS_ENABLED is false")
     ))
 
     response = client.post(
@@ -207,4 +207,4 @@ def test_offline_mode_skips_cloud_and_tts(monkeypatch):
     payload = response.json()
     assert payload["triage_source"] == "local_gemma"
     assert payload["audio_url"] is None
-    assert "Triage urgency" in payload["doctor_response"]
+    assert "MEDIUM urgency" in payload["doctor_response"]
