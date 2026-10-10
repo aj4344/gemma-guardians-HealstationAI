@@ -45,7 +45,7 @@ across India's public health system.
 
 ```mermaid
 flowchart LR
-    User["Health Worker"] --> React["React UI\n(localhost:5173)"]
+    User["Health Worker"] --> React["React UI\n(localhost:3000 in dev)"]
     React --> FastAPI["FastAPI\n(api.py :8001)"]
     FastAPI --> Gemma["Ollama\n(Gemma 4 E2B)"]
     FastAPI --> Triage["Emergency\nTriage Engine"]
@@ -86,10 +86,14 @@ python -m venv .venv
 # macOS/Linux: source .venv/bin/activate
 
 pip install -r requirements.txt
+# Linux only, for offline voice output: sudo apt install espeak-ng
 
 copy .env.example .env   # Windows
 # cp .env.example .env   # macOS/Linux
 ```
+
+The offline speech-to-text model is downloaded once while online:
+`python download_stt_model.py`.
 
 ### 3. Start the backend
 ```bash
@@ -103,8 +107,16 @@ python api.py
 cd frontend
 npm install
 npm run dev
-# Frontend: http://localhost:5173
+# Frontend: http://localhost:3000 (proxies /api to the backend on :8001)
 ```
+
+### 5. Production: one offline process
+```bash
+cd frontend && npm ci && npm run build && cd ..
+python api.py
+# UI and API are both served on http://127.0.0.1:8001 — Node.js is not needed at runtime
+```
+See [Deployment](#-deployment) for the security settings to review first.
 
 ---
 
@@ -129,23 +141,28 @@ npm run dev
 | POST | `/api/get-doctor-response` | Main triage consultation |
 | POST | `/api/transcribe-audio` | Offline speech-to-text |
 | POST | `/api/emergency-triage` | Emergency triage (HEART/BE-FAST/Trauma) |
+| POST | `/api/emergency-triage/quick` | Keyword-only quick triage (`{"symptoms": "..."}`) |
 | POST | `/api/emergency-hospitals` | Nearest hospital routing |
+| POST | `/api/search-doctors` | Listed specialists near a location (static directory) |
+| POST | `/api/search-doctors-by-city` | Listed specialists in a named city |
+| GET | `/api/audio/{filename}` | Spoken response for a consultation (WAV) |
 
 ## Project Structure
 
 ```
 gemma-guardians-HealstationAI/
-├── api.py                     ← FastAPI backend
-├── brain_of_the_doctor.py     ← Gemma 4 via Ollama
+├── api.py                     ← FastAPI backend (triage pipeline, Gemma 4 via Ollama)
+├── config.py                  ← All settings (read from env / .env)
 ├── voice_of_the_patient.py    ← faster-whisper STT
 ├── voice_of_the_doctor.py     ← pyttsx3 TTS
-├── config.py                  ← Central configuration
-├── requirements.txt
+├── brain_of_the_doctor.py     ← Standalone Gemma consultation CLI (not used by the API)
+├── advanced_doctor_service.py ← Static specialist directory
+├── requirements.txt / requirements-dev.txt
 ├── .env.example
-├── emergency_triage/          ← HEART / BE-FAST / Trauma engine
-├── doctor_search/             ← Hospital routing services
-├── tests/
-│   └── test_emergency_triage.py
+├── emergency_triage/          ← HEART / BE-FAST / Trauma engine, guardrails' constants
+├── doctor_search/             ← Directory search package
+├── tests/                     ← pytest suite (python -m pytest)
+├── scripts/                   ← Manual smoke tests against a live Ollama / microphone
 └── frontend/
     └── src/
         ├── App.jsx
@@ -175,7 +192,8 @@ curl http://127.0.0.1:8001/api/ollama-status   # {"offline_ready":true}
 curl -X POST http://127.0.0.1:8001/api/emergency-triage \
   -H "Content-Type: application/json" \
   -d '{"symptoms":"chest pain","language":"en"}'
-# open http://localhost:5173             # frontend loads
+# open http://localhost:3000             # frontend loads (dev)
+pip install -r requirements-dev.txt && python -m pytest   # backend test suite
 
 ```
 
@@ -189,14 +207,13 @@ Apache 2.0 — free to deploy across India's public health system.
 
 ```mermaid
 flowchart LR
-    subgraph Frontend["React Frontend (Vite, :5173)"]
+    subgraph Frontend["React Frontend (Vite, :3000)"]
         UI["App.jsx + UI Components"]
         Upload["Voice / Text / Image / PDF Input"]
     end
 
     subgraph Backend["FastAPI Backend (Python, :8001)"]
-        API["api.py Endpoints"]
-        Brain["brain_of_the_doctor.py"]
+        API["api.py Endpoints + triage pipeline"]
         STT["voice_of_the_patient.py (faster-whisper)"]
         TTS["voice_of_the_doctor.py (pyttsx3)"]
         Search["doctor_search/* (static database)"]
@@ -210,12 +227,11 @@ flowchart LR
 
     UI --> Upload
     Upload --> API
-    API --> Brain
     API --> STT
     API --> TTS
     API --> Search
     API --> Triage
-    Brain --> Ollama
+    API --> Ollama
     STT --> Whisper
 ```
 
@@ -236,10 +252,10 @@ flowchart LR
 ### **Step 1: Clone Repository**
 
 ```bash
-git clone git@github.com:aj4344/HealStation-AI-Doctor-Assistant.git
+git clone https://github.com/aj4344/gemma-guardians-HealstationAI.git
 
 # Navigate into the project directory
-cd HealStation-AI-Doctor-Assistant
+cd gemma-guardians-HealstationAI
 ```
 
 ---
@@ -276,13 +292,8 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-**⚠️ Troubleshooting PyAudio (Windows):**
-If `PyAudio` installation fails:
-```cmd
-# Install precompiled wheel
-pip install pipwin
-pipwin install pyaudio
-```
+**Linux only:** offline voice output (pyttsx3) needs the system speech engine:
+`sudo apt install espeak-ng`. Windows and macOS use their built-in voices.
 
 ---
 
@@ -376,8 +387,8 @@ python3 api.py      # macOS/Linux
 **Test backend:**
 ```bash
 # In a new terminal
-curl http://127.0.0.1:8001/
-# Should return: {"message":"Welcome to HealStation AI: Doctor Assistant API"}
+curl http://127.0.0.1:8001/api
+# Should return: {"status":"healthy","message":"HealStation AI: Doctor Assistant API is running"}
 ```
 
 #### **Terminal 2️⃣ - Start Frontend (React/Vite)**
@@ -391,24 +402,23 @@ npm run dev         # Using npm
 
 # You should see:
 # VITE v7.0.0  ready in XXX ms
-# ➜  Local:   http://localhost:5173/
+# ➜  Local:   http://localhost:3000/
 # ➜  Network: use --host to expose
 ```
 
-**Frontend will be accessible at:** `http://localhost:5173`
+**Frontend will be accessible at:** `http://localhost:3000`
 
 **Open in browser:**
 ```
-http://localhost:5173
+http://localhost:3000
 ```
 
 ---
 
 ### **Method 2: Optional Local Automation (User-Created)**
 
-This repository currently does not include committed startup batch scripts.
-
-If you want one-command startup on Windows, create your own local script (for example `start_all.bat`) and run backend + frontend commands from this README.
+On Windows, `start_offline.bat` starts Ollama and the backend together. To serve the UI from the
+same process, build it once first (`cd frontend && npm run build`).
 
 ---
 
@@ -416,8 +426,8 @@ If you want one-command startup on Windows, create your own local script (for ex
 
 After starting both servers, verify everything works:
 
-- [ ] **Backend Running**: Visit `http://127.0.0.1:8001` → See welcome message
-- [ ] **Frontend Running**: Visit `http://localhost:5173` → See app interface
+- [ ] **Backend Running**: Visit `http://127.0.0.1:8001/api` → `{"status":"healthy", ...}`
+- [ ] **Frontend Running**: Visit `http://localhost:3000` → See app interface
 - [ ] **API Connection**: Check browser console → No CORS errors
 - [ ] **Ollama Status**: Visit `/api/ollama-status` → `{"offline_ready":true}`
 - [ ] **Offline STT**: Try voice recording → faster-whisper transcribes locally
@@ -490,12 +500,15 @@ taskkill /F /IM node.exe
 .venv\Scripts\activate  # Windows
 source .venv/bin/activate  # Unix
 
-# Install new package
+# Install new package (then add it to requirements.txt by hand)
 pip install package-name
-pip freeze > requirements.txt  # Update requirements
 
 # Run with auto-reload
 uvicorn api:app --reload --port 8001
+
+# Run the test suite
+pip install -r requirements-dev.txt
+python -m pytest
 
 # Check Python version
 py --version
@@ -526,42 +539,40 @@ npm install package-name
 ## 📦 Project Structure
 
 ```
-HealStation-AI-Doctor-Assistant/
+gemma-guardians-HealstationAI/
 │
-├── 📄 api.py                    # FastAPI backend server (port 8001)
-├── 🧠 brain_of_the_doctor.py    # Core AI medical logic
-├── 🎤 voice_of_the_patient.py   # Speech-to-text (faster-whisper, offline)
-├── 🔊 voice_of_the_doctor.py    # Text-to-speech (pyttsx3, offline)
+├── api.py                       # FastAPI backend (port 8001) + triage pipeline
+├── config.py                    # Every setting, read from env / .env
+├── voice_of_the_patient.py      # Speech-to-text (faster-whisper, offline)
+├── voice_of_the_doctor.py       # Text-to-speech (pyttsx3, offline)
+├── brain_of_the_doctor.py       # Standalone Gemma consultation CLI (not used by the API)
+├── advanced_doctor_service.py   # Static specialist directory (unverified listings)
+├── doctor_search/               # Directory search package used by the API
+├── emergency_triage/            # HEART / BE-FAST / Trauma scoring, hospital routing
 │
-├── 🏥 Doctor Search Services
-│   ├── advanced_doctor_service.py     # Primary search (1000+ hospitals)
-│   ├── locationiq_doctor_service.py   # Legacy cloud API (not used in offline mode)
-│   └── enhanced_doctor_service.py     # Fallback service
+├── tests/                       # pytest suite: python -m pytest
+├── scripts/                     # Manual checks against live Ollama / audio files
+├── check_offline_ready.py       # Verifies Whisper model + Ollama are available
+├── download_stt_model.py        # One-time Whisper model download
+├── benchmark_offline.py         # Local inference timing
+├── start_offline.bat            # Windows: start Ollama + backend
 │
-├── 📦 Configuration
-│   ├── .env.example             # Environment variables template
-│   ├── .gitignore               # Git ignore rules
-│   ├── requirements.txt         # Python dependencies
-│   └── README.md                # This file
+├── requirements.txt             # Runtime dependencies
+├── requirements-dev.txt         # + test dependencies
+├── .env.example                 # All settings with defaults
+├── .github/workflows/ci.yml     # Tests, lint, build, audit on every push/PR
 │
-├── 🎨 frontend/                 # React + Vite application
-│   ├── src/
-│   │   ├── App.jsx              # Main React component (2770 lines)
-│   │   ├── components/          # Reusable UI components
-│   │   │   ├── DoctorRecommendations.jsx
-│   │   │   ├── LocationPermission.jsx
-│   │   │   └── ui/
-│   │   │       ├── AboutSection.jsx
-│   │   │       ├── AyushmanBharatCard.jsx
-│   │   │       ├── DisclaimerModal.jsx
-│   │   │       └── BuyMeCoffeeSection.jsx
-│   │   ├── styles/              # Theme and breakpoints
-│   │   └── constants/           # Translations
-│   │
-│   ├── package.json             # Node dependencies
-│   └── vite.config.js           # Vite configuration
-│
-└── 📄 VIDEO_SCRIPT_HACKATHON.md # Demo video script
+└── frontend/                    # React + Vite application
+    ├── src/
+    │   ├── App.jsx              # Main React component
+    │   ├── config.js            # API base URL (VITE_API_BASE_URL)
+    │   ├── components/
+    │   │   ├── DoctorRecommendations.jsx
+    │   │   ├── LocationPermission.jsx
+    │   │   └── ui/              # About, Ayushman Bharat, Disclaimer, Emergency triage
+    │   └── styles/breakpoints.js
+    ├── package.json
+    └── vite.config.js
 ```
 
 ---
@@ -620,18 +631,31 @@ Body:
   "pdf_count": 0
 }
 
-Response:
+Response (abridged):
 {
   "doctor_response": "string",
-  "audio_url": "/api/audio/doctor_response_<timestamp>.mp3",
-  "specialist_recommendation": "cardiologist",
-  "urgency_level": "low|medium|high"
+  "audio_url": "/api/audio/doctor_response_<random>.wav",  // null when TTS is off/unavailable
+  "urgency": "low|medium|high",
+  "reasons": ["..."], "actions": ["..."],
+  "specialist": "cardiologist", "confidence": 0.0-1.0,
+  "triage_source": "toxin_fast_lane|red_flag_guardrail|local_gemma|emergency_fallback|unassessed",
+  "emergency_action_block": { ... } | null
 }
+
+Errors: 422 for invalid input; 503 with a localized, patient-safe "detail" when the
+assessment could not be completed (never a fabricated "low" result).
 ```
+
+Vitals can be sent as fields (`heart_rate`, `bp_systolic`, `bp_diastolic`, `spo2`,
+`temperature` in °C) or typed in the text as `BP: 140/90, Heart Rate: 85, Temp: 101°F, Oxygen: 96%`.
+Critical vitals always produce `urgency: "high"`.
+
+Uploaded images and PDFs are accepted (max 8) but **not yet analysed** by the triage
+pipeline; they are only counted in `consensus_explanation`.
 
 #### 4. Audio Playback / Status Endpoints
 ```
-GET /api/audio/{filename}        # streams MP3
+GET /api/audio/{filename}        # streams the generated WAV (random, unguessable name)
 GET /api/audio-status/{filename} # { ready, status, file_size }
 GET /api/voices                  # supported TTS voices by language
 ```
@@ -649,8 +673,7 @@ Body:
   "radius": 25000,
   "sort_by": "distance|rating|reviews|availability|experience",
   "limit": 20,
-  "language": "en",
-  "ai_response": "optional diagnosis text"
+  "language": "en"
 }
 ```
 
@@ -668,10 +691,6 @@ Body:
   "user_latitude": 18.5204,
   "user_longitude": 73.8567
 }
-```
-
-```
-GET /api/doctor-details/{place_id}
 ```
 
 #### 6. Emergency Triage Endpoints
@@ -702,7 +721,8 @@ Body:
 ```
 
 ```
-GET /api/emergency-triage/quick?symptoms=...
+POST /api/emergency-triage/quick     # body: {"symptoms": "..."}
+GET  /api/emergency-triage/quick     # deprecated: puts symptoms in the URL / access logs
 POST /api/emergency-hospitals
 GET /api/emergency-info
 ```
@@ -724,24 +744,25 @@ This section is generated from the current source code and is the most accurate 
 - HTTP route handlers:
   - `read_root()` -> `GET /`
   - `api_health_check()` -> `GET /api`
-  - `transcribe_audio(...)` -> `POST /api/transcribe-audio`
+  - `transcribe_audio_endpoint(...)` -> `POST /api/transcribe-audio`
   - `get_consultation(...)` -> `POST /api/get-doctor-response`
   - `get_audio(filename)` -> `GET /api/audio/{filename}`
   - `get_voices()` -> `GET /api/voices`
   - `search_doctors_endpoint(request)` -> `POST /api/search-doctors`
   - `search_doctors_by_city_endpoint(request)` -> `POST /api/search-doctors-by-city`
-  - `get_doctor_details(place_id)` -> `GET /api/doctor-details/{place_id}`
   - `check_audio_status(filename)` -> `GET /api/audio-status/{filename}`
   - `emergency_triage(request)` -> `POST /api/emergency-triage`
-  - `quick_emergency_triage(symptoms)` -> `GET /api/emergency-triage/quick`
+  - `quick_emergency_triage(request)` -> `POST /api/emergency-triage/quick` (GET deprecated)
   - `find_emergency_hospitals(request)` -> `POST /api/emergency-hospitals`
   - `get_emergency_info()` -> `GET /api/emergency-info`
   - `health_check()` -> `GET /api/health-check`
+- Triage pipeline (in order): `_evaluate_toxin_fast_lane()` → `_evaluate_red_flag_guardrail()`
+  → `_run_local_gemma_triage()` / `_build_emergency_fallback_triage()` → `select_offline_first_triage()`
+  → `_critical_vital_findings()` safety floor.
 - Utility functions:
-  - `generate_audio_background(text, output_path, language)`
-  - `cleanup_old_audio_files()`
+  - `_generate_response_audio(text, language)`, `cleanup_old_audio_files()`
 
-#### `brain_of_the_doctor.py` (primary AI consultation logic)
+#### `brain_of_the_doctor.py` (standalone consultation CLI — the API calls Ollama from `api.py`)
 - Prompt and model utilities:
   - `get_system_prompt(language_code="en")`
 - AI generation functions:
@@ -761,7 +782,6 @@ This section is generated from the current source code and is the most accurate 
 #### `voice_of_the_doctor.py` (text-to-speech)
 - Text cleaning and TTS core:
   - `clean_text_for_audio(text, language="en")`
-  - `_main_tts(text, output_filepath, lang='en')`
   - `_text_to_speech_core(text, output_filepath, lang='en')`
 - Public TTS helpers:
   - `generate_doctor_voice(...)`
@@ -778,8 +798,6 @@ This section is generated from the current source code and is the most accurate 
   - `_determine_city(...)`
   - `_get_prominent_doctors(...)`
   - `_is_available_today(...)`
-  - `_get_verified_rating(...)`, `_get_verified_reviews_count(...)`
-  - `_get_verified_hours()`, `_get_verified_availability()`
   - `search_doctors_enhanced(...)`
   - `_apply_advanced_sorting(doctors, sort_by)`
   - `search_doctors_by_city(...)`
@@ -787,17 +805,8 @@ This section is generated from the current source code and is the most accurate 
 - Module-level async wrappers:
   - `search_doctors_enhanced(...)`
   - `search_doctors_by_city(...)`
-  - `test_advanced_search()`
-
-#### `enhanced_doctor_service.py` (older combined search layer)
-- Class: `EnhancedDoctorSearchService`
-- Methods:
-  - `_calculate_distance(...)`
-  - `_determine_city(...)`
-  - `_get_prominent_doctors(...)`
-  - `search_doctors_enhanced(...)`
-- Module-level wrappers:
-  - `search_doctors_enhanced(...)`, `test_enhanced_search()`
+- Only facility-level fields are returned; the per-doctor ratings, fees, credentials and
+  appointment slots in the static data are unverified and are never sent to users.
 
 #### `emergency_triage/` package
 
@@ -850,13 +859,13 @@ This section is generated from the current source code and is the most accurate 
     - `get_nearest_hospital(hospitals)`
     - `get_best_match(hospitals, emergency_type)`
 
-#### Utility and test scripts (backend)
-- `test_emergency_triage.py` - end-to-end tests for scoring, classification, vitals, and hospital routing.
-- `test_sorting_fix.py` - validates sorting modes (`distance`, `rating`, `reviews`, city-based).
-- `quick_test.py` - quick smoke test of prominent doctor list in `EnhancedDoctorSearchService`.
+#### Tests and utility scripts (backend)
+- `tests/` - pytest suite (`python -m pytest`): guardrails, toxin fast-lane, triage selection,
+  safety regressions, API endpoints, security/privacy, fairness metrics, hospital routing.
+- `scripts/run_sample_queries.py` - runs five sample cases against a live Ollama.
+- `scripts/stt_smoke_test.py` - transcribes your own audio files with faster-whisper.
 - `check_offline_ready.py` - verifies Ollama and all offline components are healthy.
 - `benchmark_offline.py` - benchmarks local inference speed.
-- `brain_of_the_doctor_fixed.py` - alternate/legacy AI pipeline retained for reference/debug workflows.
 
 ---
 
@@ -880,88 +889,53 @@ This section is generated from the current source code and is the most accurate 
     - `handleFindDoctors()`
     - `copyToClipboard(text)`, `downloadAudio(...)`, `downloadTranscription()`
 
-#### Shared component folder: `frontend/src/components/`
-- `ConsultationPanel.jsx`
-  - Export: `ConsultationPanel`
-  - Functions: `handleRecordingComplete(...)`, `handleImageUpload(...)`, `handleSubmit(...)`, `toggleAudio()`, `handleAudioEnded()`.
+#### Component folder: `frontend/src/components/`
 - `DoctorRecommendations.jsx`
-  - Export: default `DoctorRecommendations`
   - Functions: `searchDoctors()`, `searchDoctorsByCity()`, `handleFilterChange(...)`, `renderStars(...)`, `getDirections(...)`, `callDoctor(...)`, `visitWebsite(...)`.
 - `LocationPermission.jsx`
-  - Export: default `LocationPermission`
   - Functions: `requestLocation()`, `handleDeny()`, `handleSearchByCity()`.
-- `Header.jsx` -> export `Header`
-- `Footer.jsx` -> export `Footer`
-- `Sidebar.jsx` -> export `Sidebar`
-- `LoadingSpinner.jsx` -> export `LoadingSpinner`
-- `GlowCard.jsx` -> export default `GlowCard`
-- `TestComponent.jsx` -> export default `TestComponent`
+- `ui/EmergencyButton.jsx` - `EmergencyButton`, `FloatingEmergencyButton`; opens `EmergencyTriage`.
+- `ui/EmergencyTriage.jsx` - `requestLocation(...)`, `performTriage(...)`, `openDirections(hospital)`;
+  calls `POST /api/emergency-triage`, falls back to `POST /api/emergency-triage/quick`.
+- `ui/DisclaimerModal.jsx` - consent modal for medical/legal/privacy terms.
+- `ui/AboutSection.jsx` - project overview modal.
+- `ui/AyushmanBharatCard.jsx` - PM-JAY eligibility checker.
 
-#### UI component folder: `frontend/src/components/ui/`
-- `EmergencyButton.jsx`
-  - Exports: `EmergencyButton`, `FloatingEmergencyButton`, default export.
-  - Integrates `EmergencyTriage` modal and one-tap 108 call action.
-- `EmergencyTriage.jsx`
-  - Exports: `EmergencyTriage`, default export.
-  - Core functions: `requestLocation(...)`, `toggleQuickSymptom(...)`, `performTriage(...)`, `openDirections(hospital)`.
-  - Calls: `/api/emergency-triage`, `/api/emergency-triage/quick`.
-- `DisclaimerModal.jsx` - user consent modal for medical/legal/privacy terms.
-- `AboutSection.jsx` - project overview/about modal.
-- `AyushmanBharatCard.jsx`
-  - Eligibility checker UI with `handleInputChange(...)`, `checkEligibility(...)`, `generateBeneficiaryID()`.
-- `BuyMeCoffeeSection.jsx`
-  - Support modal with payment UI and `generateUPILink()`.
-- `DiagnosisLoading.jsx` - enhanced loading overlay animations.
-- `EnhancedAudioRecorder.jsx` - alternate recorder (`stopRecording`, `clearRecording`, `togglePlayback`, `downloadAudio`, `formatTime`).
-- `EnhancedFileUpload.jsx` - drag/drop file intake (`handleDragOver`, `handleDragLeave`, `handleDrop`, `handleFileSelect`, `handleFiles`, `removeFile`, `formatFileSize`, `getFileIcon`).
-- `EnhancedHeader.jsx` - alternate responsive header.
-- `modern-ui.jsx`
-  - Utility: `cn(...)`
-  - Exports reusable design primitives: `Card`, `CardHeader`, `CardContent`, `CardTitle`, `CardDescription`, `Input`, `Textarea`, `Button`, `Badge`, `Separator`, `Skeleton`, `Alert`, `AlertTitle`, `AlertDescription`.
-- `ModernPatientPanel.jsx`, `ModernDoctorPanel.jsx`, `QuickWelcome.jsx`, `WelcomeLanding.jsx`
-  - Alternate/newer UX building blocks and onboarding surfaces.
-
-#### 3D component folder: `frontend/src/components/ThreeD/`
-- `MedicalScene.jsx` -> export default `ThreeDMedicalCanvas`
-- `LoadingAnimation.jsx` -> export default `ThreeDLoadingCanvas`
-- `VoiceInput3D.jsx` -> export default `VoiceInput3DCanvas`
-- `FileUpload3D.jsx` -> export default `FileUpload3DCanvas`
-- `DoctorAnalysis3D.jsx` -> export default `DoctorAnalysis3DCanvas`
-- `EnhancedMedicalCanvas.jsx` -> export default `EnhancedMedicalCanvas`
-- `Enhanced3DFileUpload.jsx` -> export default `Enhanced3DFileUpload`
-- `index.js`
-  - Re-exports: `ThreeDMedicalCanvas`, `ThreeDLoadingCanvas`, `VoiceInput3DCanvas`, `FileUpload3DCanvas`, `DoctorAnalysis3DCanvas`.
-
-#### Constants and styling
-- `frontend/src/constants/translations.js` -> export `TRANSLATIONS` (EN/HI/MR UI copy).
-- `frontend/src/styles/themes.js` -> exports `lightTheme`, `darkTheme`, `glassMorphismTheme`.
-- `frontend/src/styles/breakpoints.js` -> exports `breakpoints`, `media` helpers.
-- `frontend/src/TestApp.jsx` -> simple test harness mounting `TestComponent`.
+#### Configuration and styling
+- `frontend/src/config.js` -> `API_BASE_URL`, `apiUrl(path)`, `openExternal(url)`.
+- `frontend/src/styles/breakpoints.js` -> `breakpoints`, `media` helpers.
 
 ---
 
 ### Environment Variables (code-verified)
 
-Required for offline inference:
-- `OLLAMA_BASE_URL` (default: `http://localhost:11434`) - Ollama server address
-- `OLLAMA_MODEL` (default: `gemma4:e2b`) - model tag to use
+All settings live in `config.py`; `.env.example` lists them with defaults. Real environment
+variables take precedence over `.env`.
 
-Optional model overrides:
-- `OLLAMA_NUM_CTX` - context window size
-- `OLLAMA_NUM_PREDICT` - max tokens to generate
-- `OLLAMA_TEMPERATURE` - sampling temperature
+Ollama / triage:
+- `OLLAMA_BASE_URL` (default: `http://localhost:11434`), `OLLAMA_MODEL` (default: `gemma4:e2b`)
+- `LOCAL_GEMMA_MODEL`, `LOCAL_GEMMA_URL` - optional overrides; default to the two above
+- `LOCAL_GEMMA_TIMEOUT_SECONDS` (120), `LOCAL_GEMMA_NUM_CTX` (1024), `LOCAL_GEMMA_NUM_PREDICT` (1400)
+- `LOCAL_TRIAGE_CONFIDENCE_THRESHOLD` (0.6) - below it the rules-based classifier is used
+- `ENABLE_LOCAL_TRIAGE` (true), `FAIRNESS_PARITY_THRESHOLD` (0.05)
 
-Offline STT settings:
-- `ENABLE_LOCAL_STT` (default: `true`) - enable local STT (faster-whisper)
-- `LOCAL_STT_MODEL_SIZE` (default: `small`) - Whisper model size (tiny/base/small/medium)
-- `LOCAL_STT_MODEL_PATH` (optional) - local model directory path
-- `LOCAL_STT_DEVICE` (default: `cpu`) - `cpu` or `cuda`
-- `LOCAL_STT_COMPUTE_TYPE` (default: `int8`) - faster-whisper compute type
-- `LOCAL_STT_CPU_THREADS` (default: `0`) - auto when 0
-- `LOCAL_STT_NUM_WORKERS` (default: `1`) - decode workers
+Server:
+- `API_HOST` (`127.0.0.1`), `API_PORT` (`8001`), `MAX_REQUEST_MB` (60)
+- `CORS_ALLOW_ORIGINS` (`http://localhost:3000,http://127.0.0.1:3000`)
+- `FRONTEND_DIST_DIR` (`frontend/dist`) - served at `/` when it exists
 
-Offline TTS settings:
-- `LOCAL_TTS_ENABLED` (default: `true`) - enable local TTS (pyttsx3, outputs `.wav`)
+Offline STT:
+- `ENABLE_LOCAL_STT` (true), `LOCAL_STT_MODEL_SIZE` (`small`), `LOCAL_STT_MODEL_PATH`,
+  `LOCAL_STT_DEVICE` (`cpu`), `LOCAL_STT_COMPUTE_TYPE` (`int8`), `LOCAL_STT_CPU_THREADS` (0 = auto),
+  `LOCAL_STT_NUM_WORKERS` (1), `LOCAL_STT_LOCAL_FILES_ONLY` (true), `MAX_AUDIO_UPLOAD_MB` (25)
+
+Offline TTS:
+- `LOCAL_TTS_ENABLED` (true), `AUDIO_OUTPUT_DIR` (`audio_outputs/`),
+  `AUDIO_RETENTION_SECONDS` (3600)
+
+Frontend (build time):
+- `VITE_API_BASE_URL` - only when the API is on a different origin (default: same origin)
+- `VITE_DEV_API_TARGET` - backend used by the dev-server proxy (default `http://127.0.0.1:8001`)
 
 ---
 
@@ -970,14 +944,16 @@ Offline TTS settings:
 1. User records audio or enters text in frontend.
 2. Audio (if present) -> `POST /api/transcribe-audio`.
 3. Consultation payload (text + optional image/pdf base64) -> `POST /api/get-doctor-response`.
-4. Backend AI pipeline (`brain_of_the_doctor.py`) returns structured diagnosis + specialist + urgency.
-5. Backend TTS pipeline (`voice_of_the_doctor.py`) generates MP3 in `audio_outputs/`.
+4. Backend triage pipeline (`api.py`): toxin fast-lane → red-flag guardrail → Gemma 4 via Ollama
+   (rules-based classifier as fallback) → critical-vitals safety floor.
+5. Backend TTS pipeline (`voice_of_the_doctor.py`) generates a WAV in `audio_outputs/` (deleted after
+   `AUDIO_RETENTION_SECONDS`).
 6. Frontend polls `GET /api/audio-status/{filename}` and then plays `GET /api/audio/{filename}`.
 7. If user chooses doctor discovery, frontend calls:
    - `POST /api/search-doctors` (location-based), or
    - `POST /api/search-doctors-by-city` (city query).
 8. Emergency flow uses `EmergencyButton` / `EmergencyTriage` and calls:
-   - `POST /api/emergency-triage` (full), fallback `GET /api/emergency-triage/quick`.
+   - `POST /api/emergency-triage` (full), fallback `POST /api/emergency-triage/quick`.
    - Optional hospital lookup via `POST /api/emergency-hospitals`.
 
 ---
@@ -1015,33 +991,22 @@ Offline TTS settings:
 
 ### 2. Location-Based Doctor Discovery 
 
-**What Was Fixed:**
-- ✅ Sorting algorithm now handles mixed data types (numeric ratings + "Contact for ratings" strings)
-- ✅ Added safe numeric extraction helpers
-- ✅ Fixed `available_today` boolean vs string issue
-- ✅ Top-rated and most-reviewed sorting now works correctly
-- ✅ All 4 sorting modes verified: distance, rating, reviews, city-based
-
 **Data Sources:**
-1. **Static Medical Database**: 1000+ verified hospitals in Indian cities
-2. **OpenStreetMap**: Used for hospital location data
-3. **Enhanced Fallback**: Additional search when needed
+1. **Static specialist directory** (`advanced_doctor_service.py`): a small set of listings for
+   major cities (Pune, Mumbai, Delhi, Bengaluru, Chennai). Listings have **not** been independently
+   verified; every result says so and asks the user to call ahead.
+2. **Static emergency hospital list** (`emergency_triage/hospital_routing_service.py`): major
+   public hospitals in seven cities. Locations outside these cities return no results.
 
 **Search Capabilities:**
-- Find doctors within 50km radius
-- Search specific cities without GPS
-- Filter by specialty (20+ options)
-- Sort by: nearest, top-rated, most-reviewed, availability
-- Semantic matching from AI diagnosis
+- Search near the user's location or by city name without GPS
+- Filter by specialty; sort by distance or listed availability
 - Distance calculation to user location
-- Phone numbers and addresses included
+- Hospital address and main phone number
 
 **Medical Safety:**
-- ✅ NO fake data generation
-- ✅ Only verified facilities shown
-- ✅ Unverified facilities marked "Contact for ratings"
-- ✅ Real phone numbers and addresses
-- ✅ Source attribution (static database)
+- ✅ Ratings, review counts, fees, credentials and appointment slots are never shown
+- ✅ Every listing is marked unverified with a "call ahead" note
 
 ### 3. Voice Interaction
 
@@ -1066,11 +1031,8 @@ Offline TTS settings:
 - **Limit**: 8 files total per consultation
 - **Processing**: Base64 encoding for secure transmission
 
-**Analysis:**
-- Extract lab values and ranges
-- Identify abnormalities in images
-- Interpret diagnostic conclusions
-- Cross-reference with symptoms
+**Analysis:** not implemented yet. Files are accepted and counted, but the triage pipeline
+does not read their content; assessments are based on the typed/spoken symptoms and vitals.
 
 ---
 
@@ -1097,29 +1059,27 @@ Offline TTS settings:
 ## 🛠️ Technology Stack
 
 ### Backend
-- **Framework**: FastAPI 0.110.0
+- **Framework**: FastAPI (Pydantic v2)
 - **Server**: Uvicorn (ASGI)
-- **AI/LLM**: Ollama (Gemma 4 E2B)
+- **AI/LLM**: Ollama (Gemma 4 E2B) over HTTP (`requests`)
 - **STT**: faster-whisper (local)
 - **TTS**: pyttsx3 (offline)
-- **PDF Processing**: PyPDF2 3.0.1
-- **HTTP Client**: aiohttp 3.8.6, httpx 0.27.0
-- **Environment**: python-dotenv 1.0.1
+- **Environment**: python-dotenv
 
 ### Frontend
 - **Framework**: React 19.1.0
 - **Build Tool**: Vite 7.0.0
 - **Styling**: Styled Components 6.1.19
 - **Animations**: Framer Motion 12.19.2
-- **HTTP Client**: Axios 1.10.0
-- **Voice Recording**: react-audio-voice-recorder 2.2.0
+- **HTTP Client**: Axios
+- **Voice Recording**: browser MediaRecorder API
 - **Icons**: React Icons 5.5.0
 
 ### Local Services
 - **AI**: Ollama (Gemma 4 E2B, fully offline)
 - **STT**: faster-whisper (on-device)
 - **TTS**: pyttsx3 (offline)
-- **Maps Data**: OpenStreetMap
+- **Directions**: opens Google Maps only when the user taps "Directions"
 
 ---
 
@@ -1135,8 +1095,8 @@ py api.py
 # Terminal 2 (from frontend/)
 npm run dev
 
-# Open browser: http://localhost:5173
-# Test: Record voice → Upload image → Get diagnosis
+# Open browser: http://localhost:3000
+# Test: Record voice → Get triage assessment
 ```
 
 **Test Doctor Search:**
@@ -1145,6 +1105,16 @@ npm run dev
 # Allow location access or search by city
 # Test sorting: Distance, Rating, Reviews
 ```
+
+### Automated Tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest            # backend: no Ollama, microphone or network needed
+cd frontend && npm run lint && npm run build
+```
+
+CI (`.github/workflows/ci.yml`) runs the same on every push and pull request.
 
 ### API Testing
 
@@ -1160,7 +1130,7 @@ curl -X POST http://127.0.0.1:8001/api/search-doctors \
     "latitude": 18.5204,
     "longitude": 73.8567,
     "specialty": "cardiologist",
-    "sort_by": "rating",
+    "sort_by": "distance",
     "limit": 5
   }'
 ```
@@ -1175,12 +1145,12 @@ async def test():
         specialty='cardiologist',
         latitude=18.5204,
         longitude=73.8567,
-        sort_by='rating',
+        sort_by='distance',
         limit=5
     )
-    print(f"Found {len(doctors)} doctors")
+    print(f"Found {len(doctors)} listings")
     for doc in doctors:
-        print(f"{doc['name']} - {doc['rating']}⭐ - {doc['distance_km']}km")
+        print(f"{doc['name']} - {doc['hospital']} - {doc['distance_km']}km")
 
 asyncio.run(test())
 ```
@@ -1223,18 +1193,20 @@ asyncio.run(test())
 ## 🔒 Security & Privacy
 
 ### Data Handling
-- ✅ Audio files deleted after 1 hour automatically
+- ✅ All inference, STT and TTS run on the device; no patient data is sent to external services
+- ✅ Generated recordings use random names and are deleted after `AUDIO_RETENTION_SECONDS`
+  (default 1 hour), including leftovers at startup
+- ✅ Logs never contain symptoms, transcripts, model output or locations (only sizes/outcomes)
+- ✅ Production bundles strip debug logging; the UI makes no third-party requests
 - ✅ No patient data stored permanently
-- ✅ Secure Base64 encoding for files
-- ✅ CORS configured for frontend origin
-- ✅ Environment variables for sensitive keys
-- ✅ No fake medical data generation
 
 ### API Security
-- Input validation on all endpoints
-- File size limits enforced
-- Secure multipart form handling
-- No external API calls = no rate limits or key exposure
+- CORS limited to `CORS_ALLOW_ORIGINS` (no credentials); the bundled UI is same-origin
+- Input validation and size limits: text, attachments, audio uploads (`MAX_AUDIO_UPLOAD_MB`),
+  request bodies (`MAX_REQUEST_MB`)
+- Error responses never include internal exception details
+- **No authentication:** the API binds to `127.0.0.1` by default. Do not expose it on a
+  network without a reverse proxy that adds TLS and authentication.
 
 ### Medical Disclaimer
 ⚠️ **IMPORTANT**: This AI tool is for educational and informational purposes only. It is NOT a substitute for professional medical advice, diagnosis, or treatment. Always consult with qualified healthcare professionals for medical concerns.
@@ -1279,8 +1251,8 @@ npm run dev -- --port 3000
 # Chrome: Settings → Privacy → Site Settings → Microphone
 # Allow microphone access for localhost
 
-# Check if PyAudio is installed
-pip show pyaudio
+# Recording happens in the browser; transcription needs the Whisper model:
+python download_stt_model.py
 ```
 
 **4. Ollama not responding**
@@ -1310,36 +1282,28 @@ No automated cleanup scripts are currently committed in this repository.
 Recommended maintenance practices:
 - Remove stale files only after running tests and manual API checks
 - Keep `audio_outputs/` trimmed if it grows too large
-- Re-run `test_emergency_triage.py` and `test_sorting_fix.py` after major backend changes
+- Run `python -m pytest` after backend changes
 
 ---
 
 ## 🚀 Deployment
 
-### Production Considerations
+### Production (single device, offline)
 
-**Backend:**
-- Use Gunicorn with Uvicorn workers
-- Set `reload=False` in production
-- Configure proper CORS origins
-- Use environment-specific .env files
-- Set up logging and monitoring
-- Implement rate limiting
-- Use HTTPS
+```bash
+pip install -r requirements.txt
+python download_stt_model.py              # once, while online
+cd frontend && npm ci && npm run build && cd ..
+python api.py                             # UI + API on http://127.0.0.1:8001
+```
 
-**Frontend:**
-- Build for production: `npm run build`
-- Serve via Nginx or Apache
-- Configure environment variables
-- Enable compression (gzip)
-- Use CDN for assets
-- Implement caching headers
-
-**API Keys:**
-- Never commit `.env` to Git
-- Use secret management services
-- Rotate keys periodically
-- Monitor usage and limits
+Checklist:
+- Keep `API_HOST=127.0.0.1` unless a reverse proxy adds TLS and authentication in front.
+- If the UI is hosted on another origin, build it with `VITE_API_BASE_URL=https://api.example`
+  and add that UI origin to `CORS_ALLOW_ORIGINS`.
+- Run one Uvicorn worker: the fairness metrics are in-memory and TTS is serialized per process.
+- Review the static specialist directory before relying on it (see Data Sources above).
+- Pin dependency versions for your deployment (`pip freeze` in a clean venv) and keep CI green.
 
 ---
 
@@ -1393,19 +1357,17 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## 📊 Project Stats
 
-- **Total Lines of Code**: ~15,000+
-- **Backend Files**: 8 core Python modules
-- **Frontend Components**: 10+ React components
-- **API Endpoints**: 7 main endpoints
 - **Supported Languages**: 3 (EN, HI, MR)
-- **Supported Specialties**: 20+
-- **Medical Facilities Database**: 1000+ hospitals
+- **Clinical protocols**: HEART, BE-FAST, Trauma + red-flag and toxin guardrails
+- **Emergency hospital list**: major public hospitals in 7 cities (static, offline)
 
 
 ---
 
 ## 🔮 Future Roadmap
 
+- [ ] Analyse uploaded reports/images in the triage pipeline (currently accepted but not read)
+- [ ] Replace the static specialist directory with a verified source (e.g. ABDM Health Facility Registry)
 - [ ] Add more Indian languages (Tamil, Telugu, Bengali)
 - [ ] Implement appointment booking system
 - [ ] Add telemedicine video consultation

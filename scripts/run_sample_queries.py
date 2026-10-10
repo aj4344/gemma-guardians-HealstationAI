@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-Test script to run 5 symptom queries against local Gamma model.
+Run 5 sample symptom queries against the local Gemma model (requires Ollama).
+Usage: python scripts/run_sample_queries.py
 """
 
 import sys
 import json
 import os
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 # Set environment variables BEFORE importing api
-os.environ["OFFLINE_MODE"] = "true"
 os.environ["ENABLE_LOCAL_TRIAGE"] = "true"
 os.environ["LOCAL_TTS_ENABLED"] = "false"
 

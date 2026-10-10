@@ -14,25 +14,36 @@ print("=" * 55)
 
 all_ok = True
 
+sys.path.insert(0, ".")
+from config import (
+    LOCAL_GEMMA_MODEL, OLLAMA_BASE_URL, STT_COMPUTE, STT_DEVICE, STT_MODEL_PATH, STT_MODEL_SIZE,
+)
+
 # --- 1. Whisper STT -----------------------------------------
-print("\n[1/3] Speech-to-Text (faster-whisper small)...")
+stt_model = STT_MODEL_PATH or STT_MODEL_SIZE
+print(f"\n[1/3] Speech-to-Text (faster-whisper {stt_model})...")
 try:
     from faster_whisper import WhisperModel
     t = time.time()
-    m = WhisperModel("small", device="cpu", compute_type="int8", local_files_only=True)
+    m = WhisperModel(stt_model, device=STT_DEVICE, compute_type=STT_COMPUTE, local_files_only=True)
     print(f"      [OK] Loaded in {time.time()-t:.1f}s (no internet used)")
 except Exception as e:
     print(f"      [FAIL] {e}")
+    print("         -> Fix: run 'python download_stt_model.py' once while online")
     all_ok = False
 
 # --- 2. Ollama / Gemma ---------------------------------------
-print("\n[2/3] Local Gemma AI (Ollama at port 11434)...")
+print(f"\n[2/3] Local Gemma AI ({LOCAL_GEMMA_MODEL} at {OLLAMA_BASE_URL})...")
 try:
-    r = requests.get("http://127.0.0.1:11434/", timeout=5)
-    if r.status_code < 500:
-        print("      [OK] Ollama is running and reachable")
+    r = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
+    r.raise_for_status()
+    pulled = {model.get("name") for model in r.json().get("models", [])}
+    if LOCAL_GEMMA_MODEL in pulled or f"{LOCAL_GEMMA_MODEL}:latest" in pulled:
+        print("      [OK] Ollama is running and the model is pulled")
     else:
-        raise Exception(f"HTTP {r.status_code}")
+        print(f"      [FAIL] Model not pulled. Available: {sorted(pulled) or 'none'}")
+        print(f"         -> Fix: ollama pull {LOCAL_GEMMA_MODEL}")
+        all_ok = False
 except Exception as e:
     print(f"      [FAIL] {e}")
     print("         -> Fix: Run 'ollama serve' or double-click start_offline.bat")
@@ -41,7 +52,6 @@ except Exception as e:
 # --- 3. Safety Guardrail -------------------------------------
 print("\n[3/3] Safety guardrail (no internet needed)...")
 try:
-    sys.path.insert(0, ".")
     from api import _evaluate_red_flag_guardrail
     result = _evaluate_red_flag_guardrail("I have pain in my heart and breathlessness")
     if result["apply_guardrail"]:
@@ -62,3 +72,4 @@ if all_ok:
 else:
     print("  Some checks FAILED. Fix the issues above first.")
 print("=" * 55)
+sys.exit(0 if all_ok else 1)

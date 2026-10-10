@@ -1,6 +1,12 @@
+"""
+Offline faster-whisper STT smoke test.
+Usage: python scripts/stt_smoke_test.py --en path.wav --hi path.webm --mr path.wav
+"""
 import argparse
 import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from voice_of_the_patient import transcribe_audio
 
@@ -27,7 +33,7 @@ def main():
     selected = {language: path for language, path in samples.items() if path}
 
     if not selected:
-        print("Usage: python test_offline_stt.py --en path.wav --hi path.webm --mr path.wav")
+        print("Usage: python scripts/stt_smoke_test.py --en path.wav --hi path.webm --mr path.wav")
         print("Provide at least one audio file. Browser WebM recordings are supported.")
         return 2
 
