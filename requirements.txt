@@ -11,6 +11,12 @@ python-multipart>=0.0.18   # >=0.0.18 fixes CVE-2024-53981 (multipart DoS)
 python-dotenv>=1.0
 pydantic>=2.7,<3
 
+# ── Encrypted case store (ADR-001) ────────────────────────
+sqlalchemy>=2.0.30,<3
+alembic>=1.13
+cryptography>=43
+keyring>=25
+
 # ── Gemma 4 via Ollama (HTTP) ─────────────────────────────
 requests>=2.32.4           # >=2.32.4 fixes CVE-2024-47081 (.netrc credential leak)
 
