@@ -102,7 +102,6 @@ def test_consultation_route_trigger_behavior_returns_emergency_block(monkeypatch
     monkeypatch.setattr(api, "text_to_speech_for_api", _write_dummy_audio)
     monkeypatch.setattr(api, "_run_local_gemma_triage", _should_not_run)
     monkeypatch.setattr(api, "_build_emergency_fallback_triage", _should_not_run)
-    monkeypatch.setattr(api, "get_doctor_response", _should_not_run)
 
     response = client.post(
         "/api/get-doctor-response",
@@ -152,9 +151,6 @@ def test_local_gemma_preferred_when_valid(monkeypatch):
         "confidence": 0.2,
         "doctor_response": "Emergency fallback response.",
     })
-    monkeypatch.setattr(api, "get_doctor_response", lambda *args, **kwargs: (_ for _ in ()).throw(
-        AssertionError("Cloud path should not be used when local Gemma is valid")
-    ))
     monkeypatch.setattr(api, "text_to_speech_for_api", lambda *args, **kwargs: None)
 
     response = client.post(
@@ -191,9 +187,6 @@ def test_offline_mode_skips_cloud_and_tts(monkeypatch):
 
     monkeypatch.setattr(api, "_run_local_gemma_triage", lambda *args, **kwargs: local_payload)
     monkeypatch.setattr(api, "_build_emergency_fallback_triage", lambda *args, **kwargs: None)
-    monkeypatch.setattr(api, "get_doctor_response", lambda *args, **kwargs: (_ for _ in ()).throw(
-        AssertionError("Cloud path should not be used in OFFLINE_MODE")
-    ))
     monkeypatch.setattr(api, "text_to_speech_for_api", lambda *args, **kwargs: (_ for _ in ()).throw(
         AssertionError("TTS should not run in OFFLINE_MODE")
     ))

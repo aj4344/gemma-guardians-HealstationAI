@@ -12,29 +12,45 @@ ALLOWED_URGENCY = {"low", "medium", "high"}
 DEFAULT_SPECIALIST = "general"
 DEFAULT_CONFIDENCE = 0.5
 
+_URGENCY_MAPPING = {
+    "critical": "high",
+    "emergency": "high",
+    "urgent": "high",
+    "high": "high",
+    "within_10_minutes": "high",
+    "immediate": "high",
+    "moderate": "medium",
+    "medium": "medium",
+    "standard": "medium",
+    "within_24_hours": "medium",
+    "low": "low",
+    "minimal": "low",
+    "self_care": "low",
+    "scheduled": "low",
+}
+
+# Used when no triage source produced a usable result: never report "low"
+# for a patient nobody has actually assessed.
+UNASSESSED_TRIAGE = {
+    "urgency": "medium",
+    "reasons": ["Automated triage could not be completed for these symptoms."],
+    "actions": [
+        "Arrange an in-person assessment by a health worker or doctor today.",
+        "Call 108 immediately if symptoms are severe or getting worse.",
+    ],
+    "specialist": DEFAULT_SPECIALIST,
+    "confidence": 0.0,
+}
+
+
+def is_known_urgency(value: Any) -> bool:
+    return str(value or "").strip().lower() in _URGENCY_MAPPING
+
 
 def normalize_urgency(value: Any) -> str:
     """Map arbitrary urgency labels to low/medium/high."""
     text = str(value or "").strip().lower()
-
-    mapping = {
-        "critical": "high",
-        "emergency": "high",
-        "urgent": "high",
-        "high": "high",
-        "within_10_minutes": "high",
-        "immediate": "high",
-        "moderate": "medium",
-        "medium": "medium",
-        "standard": "medium",
-        "within_24_hours": "medium",
-        "low": "low",
-        "minimal": "low",
-        "self_care": "low",
-        "scheduled": "low",
-    }
-
-    return mapping.get(text, "low")
+    return _URGENCY_MAPPING.get(text, "low")
 
 
 def ensure_list(value: Any) -> List[str]:
@@ -126,7 +142,7 @@ def normalize_and_validate_local_triage(payload: Optional[Dict[str, Any]]) -> Tu
     except (TypeError, ValueError):
         confidence_ok = False
 
-    urgency_ok = raw_urgency is not None and normalize_urgency(raw_urgency) in ALLOWED_URGENCY
+    urgency_ok = is_known_urgency(raw_urgency)
 
     is_valid = urgency_ok and reasons_ok and actions_ok and specialist_ok and confidence_ok
     return normalized, is_valid
@@ -141,9 +157,13 @@ def select_offline_first_triage(
     Local-first selection:
     1) local model when valid and confidence >= threshold
     2) emergency fallback otherwise
+    3) a conservative "unassessed" result when neither produced output
     """
     normalized_local, local_valid = normalize_and_validate_local_triage(local_payload)
     if local_valid and normalized_local["confidence"] >= confidence_threshold:
         return normalized_local, "local_gemma"
+
+    if not emergency_payload:
+        return normalize_triage(UNASSESSED_TRIAGE), "unassessed"
 
     return normalize_triage(emergency_payload), "emergency_fallback"

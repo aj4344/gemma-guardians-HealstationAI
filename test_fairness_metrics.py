@@ -45,7 +45,6 @@ def _stub_consultation_dependencies(monkeypatch):
     monkeypatch.setattr(api, "text_to_speech_for_api", _write_dummy_audio)
     monkeypatch.setattr(api, "_run_local_gemma_triage", lambda *args, **kwargs: local_payload)
     monkeypatch.setattr(api, "_build_emergency_fallback_triage", lambda *args, **kwargs: emergency_payload)
-    monkeypatch.setattr(api, "get_doctor_response", _should_not_run)
 
 
 def test_age_group_accuracy_buckets_match_required_ranges():

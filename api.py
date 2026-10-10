@@ -6,24 +6,22 @@ No patient data is transmitted to external servers.
 
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 import logging
 import uvicorn
 import os
 import time
 import uuid
 import json
-from io import BytesIO
 import requests
 import re
-from dotenv import load_dotenv
 
-load_dotenv(override=True)
+# config loads .env before anything below reads the environment
+from config import OLLAMA_BASE_URL, OLLAMA_MODEL
 
 # Import core AI components
-from brain_of_the_doctor import get_doctor_response, encode_image
 from voice_of_the_doctor import text_to_speech_for_api, get_available_voices
 from voice_of_the_patient import (
     transcribe_audio,
@@ -33,23 +31,17 @@ from voice_of_the_patient import (
     LOCAL_STT_COMPUTE_TYPE,
     ENABLE_LOCAL_STT,
 )
-from config import OLLAMA_BASE_URL, OLLAMA_MODEL
-from doctor_search import (
-    search_doctors_enhanced,
-    EnhancedDoctorSearchService,
-)
+from doctor_search import EnhancedDoctorSearchService
 from doctor_search import search_doctors_enhanced as advanced_search_doctors, search_doctors_by_city as advanced_search_city
 
 # Import Emergency Triage Module
 from emergency_triage import (
     EmergencyTriageRequest, TriageResponse, HospitalSearchRequest,
-    EmergencyHospital, EmergencyScores, VitalSigns, TriageLevel,
-    EmergencyClassifier, HospitalRoutingService, TriageService,
+    VitalSigns, EmergencyClassifier, HospitalRoutingService,
     TRIAGE_LEVELS, EMERGENCY_NUMBERS,
-    BEFAST_KEYWORDS,
-    TRAUMA_KEYWORDS, HEART_SCORE_CONFIG,
     TOXIN_FAST_LANE_KEYWORDS
 )
+from emergency_triage.constants import VITAL_SIGNS_CRITICAL
 from emergency_triage.offline_triage_engine import (
     normalize_triage,
     select_offline_first_triage,
@@ -210,19 +202,28 @@ def _extract_json_payload(text: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _normalize_local_gemma_urgency(value: Any) -> str:
+def _normalize_local_gemma_urgency(value: Any) -> Optional[str]:
+    """Map the model's urgency label to low/medium/high.
+
+    Unrecognised labels return None so the payload fails validation and the
+    rules-based classifier is used, instead of silently defaulting to "low".
+    """
     text = str(value or "").strip().lower()
     if text in {"low", "medium", "high"}:
         return text
 
     mapping = {
         "critical": "high",
+        "emergency": "high",
         "immediate": "high",
+        "severe": "high",
         "urgent": "medium",
+        "moderate": "medium",
         "stable": "low",
         "minor": "low",
+        "routine": "low",
     }
-    return mapping.get(text, "low")
+    return mapping.get(text)
 
 
 def _normalize_local_gemma_list(value: Any) -> List[str]:
@@ -275,26 +276,37 @@ def _parse_vital_signs_from_text(text: str) -> Dict[str, Optional[float]]:
     if not text:
         return vitals
 
-    # Look for patterns like "Heart Rate: 85 bpm", "BP: 120/80", "SpO2: 98%", "Temp: 98.6"
-    hr_match = re.search(r"Heart\s*Rate:\s*(\d+)", text, re.IGNORECASE)
+    # Accepts the UI placeholder format ("BP: 140/90, Heart Rate: 85 bpm,
+    # Temp: 101°F, Oxygen: 96%") as well as long forms ("Blood Pressure: ...").
+    hr_match = re.search(r"\b(?:heart\s*rate|hr|pulse)\s*[:=]?\s*(\d{2,3})\b", text, re.IGNORECASE)
     if hr_match:
         vitals["heart_rate"] = int(hr_match.group(1))
 
-    bp_match = re.search(r"Blood\s*Pressure:\s*(\d+)/(\d+)", text, re.IGNORECASE)
+    bp_match = re.search(r"\b(?:blood\s*pressure|bp)\s*[:=]?\s*(\d{2,3})\s*/\s*(\d{2,3})\b", text, re.IGNORECASE)
     if bp_match:
         vitals["bp_systolic"] = int(bp_match.group(1))
         vitals["bp_diastolic"] = int(bp_match.group(2))
 
-    spo2_match = re.search(r"Oxygen\s*Saturation:\s*(\d+)", text, re.IGNORECASE)
+    spo2_match = re.search(
+        r"\b(?:oxygen(?:\s*saturation)?|sp\s*o2|o2\s*sat(?:uration)?|saturation)\s*[:=]?\s*(\d{2,3})\b",
+        text,
+        re.IGNORECASE,
+    )
     if spo2_match:
         vitals["spo2"] = int(spo2_match.group(1))
 
-    temp_match = re.search(r"Temperature:\s*([\d.]+)", text, re.IGNORECASE)
+    temp_match = re.search(
+        r"\b(?:temperature|temp)\s*[:=]?\s*(\d{2,3}(?:\.\d+)?)\s*°?\s*([cf])?\b",
+        text,
+        re.IGNORECASE,
+    )
     if temp_match:
-        try:
-            vitals["temperature"] = float(temp_match.group(1))
-        except ValueError:
-            pass
+        temperature = float(temp_match.group(1))
+        unit = (temp_match.group(2) or "").lower()
+        # No body temperature in Celsius exceeds 45, so larger values are Fahrenheit.
+        if unit == "f" or (not unit and temperature > 45):
+            temperature = (temperature - 32) * 5 / 9
+        vitals["temperature"] = round(temperature, 1)
 
     return vitals
 
@@ -440,6 +452,13 @@ def _run_local_gemma_triage(
         return None
 
 
+def _clamp_vital(value: Optional[float], low: float, high: float, as_int: bool = True):
+    if value is None:
+        return None
+    clamped = min(max(value, low), high)
+    return int(round(clamped)) if as_int else float(clamped)
+
+
 def _build_emergency_fallback_triage(
     patient_text: str,
     language: str,
@@ -453,15 +472,18 @@ def _build_emergency_fallback_triage(
 ) -> Optional[Dict[str, Any]]:
     """Reuse existing emergency classifier as strict fallback path."""
     try:
-        # Build VitalSigns object only if any value was provided
+        # Build VitalSigns object only if any value was provided. Values are
+        # clamped into the model's accepted range: the most extreme readings
+        # (e.g. SpO2 45%) would otherwise fail validation and drop the whole
+        # fallback. Clamped values stay beyond every critical threshold.
         vital_signs = None
         if any(v is not None for v in [heart_rate, bp_systolic, bp_diastolic, spo2, temperature]):
             vital_signs = VitalSigns(
-                heart_rate=heart_rate,
-                blood_pressure_systolic=bp_systolic,
-                blood_pressure_diastolic=bp_diastolic,
-                oxygen_saturation=spo2,
-                temperature_celsius=temperature,
+                heart_rate=_clamp_vital(heart_rate, 30, 250),
+                blood_pressure_systolic=_clamp_vital(bp_systolic, 50, 250),
+                blood_pressure_diastolic=_clamp_vital(bp_diastolic, 30, 150),
+                oxygen_saturation=_clamp_vital(spo2, 50, 100),
+                temperature_celsius=_clamp_vital(temperature, 34, 43, as_int=False),
             )
         emergency_request = EmergencyTriageRequest(
             symptoms=patient_text,
@@ -498,6 +520,32 @@ def _build_emergency_fallback_triage(
     except Exception as emergency_error:
         print(f"[API DEBUG] Emergency triage fallback failed: {emergency_error}")
         return None
+
+
+_UNASSESSED_MESSAGES = {
+    "en": (
+        "Automated triage could not be completed for these symptoms. Please arrange an "
+        "in-person assessment today, and call 108 immediately if symptoms are severe or getting worse."
+    ),
+    "hi": (
+        "इन लक्षणों के लिए स्वचालित ट्राइएज पूरा नहीं हो सका। कृपया आज ही किसी स्वास्थ्य कार्यकर्ता या डॉक्टर से "
+        "जांच कराएं, और लक्षण गंभीर हों या बढ़ रहे हों तो तुरंत 108 पर कॉल करें।"
+    ),
+    "mr": (
+        "या लक्षणांसाठी स्वयंचलित ट्रायएज पूर्ण होऊ शकले नाही. कृपया आजच आरोग्य कर्मचारी किंवा डॉक्टरांकडून "
+        "तपासणी करून घ्या, आणि लक्षणे गंभीर असल्यास किंवा वाढत असल्यास त्वरित 108 वर कॉल करा."
+    ),
+}
+
+_ASSESSMENT_FAILED_MESSAGES = {
+    "en": "The assessment could not be completed due to a technical problem. Please try again. If symptoms are severe, call 108 now.",
+    "hi": "तकनीकी समस्या के कारण आकलन पूरा नहीं हो सका। कृपया फिर से प्रयास करें। लक्षण गंभीर हों तो तुरंत 108 पर कॉल करें।",
+    "mr": "तांत्रिक अडचणीमुळे मूल्यांकन पूर्ण होऊ शकले नाही. कृपया पुन्हा प्रयत्न करा. लक्षणे गंभीर असल्यास त्वरित 108 वर कॉल करा.",
+}
+
+
+def _localized_message(messages: Dict[str, str], language: Optional[str]) -> str:
+    return messages.get(_normalize_language(language), messages["en"])
 
 
 def _compose_doctor_response_from_triage(triage_data: Dict[str, Any]) -> str:
@@ -614,248 +662,343 @@ def _localize_urgency_label(language: str, urgency: str) -> str:
     return mapping.get(language, mapping["en"]).get(urgency, urgency)
 
 
+_GUARDRAIL_CATEGORY_LABELS = {
+    "en": {
+        "cardiac": "cardiac",
+        "stroke": "stroke",
+        "breathing_distress": "breathing distress",
+        "severe_bleeding": "severe bleeding",
+        "trauma": "major trauma",
+        "unconscious": "unconsciousness",
+        "seizure": "seizure",
+        "anaphylaxis": "severe allergic reaction",
+        "self_harm": "suicide or self-harm risk",
+        "critical_vitals": "critical vital signs",
+    },
+    "hi": {
+        "cardiac": "हृदय संबंधी",
+        "stroke": "स्ट्रोक",
+        "breathing_distress": "सांस लेने में कठिनाई",
+        "severe_bleeding": "गंभीर रक्तस्राव",
+        "trauma": "गंभीर चोट",
+        "unconscious": "बेहोशी",
+        "seizure": "दौरा (मिर्गी)",
+        "anaphylaxis": "गंभीर एलर्जी प्रतिक्रिया",
+        "self_harm": "आत्महत्या या आत्म-क्षति का जोखिम",
+        "critical_vitals": "गंभीर वाइटल साइन",
+    },
+    "mr": {
+        "cardiac": "हृदय संबंधित",
+        "stroke": "स्ट्रोक",
+        "breathing_distress": "श्वासोच्छ्वास त्रास",
+        "severe_bleeding": "तीव्र रक्तस्राव",
+        "trauma": "गंभीर दुखापत",
+        "unconscious": "बेशुद्धी",
+        "seizure": "झटके (फिट)",
+        "anaphylaxis": "तीव्र ॲलर्जी प्रतिक्रिया",
+        "self_harm": "आत्महत्या किंवा स्वतःला इजा होण्याचा धोका",
+        "critical_vitals": "गंभीर जीवनावश्यक चिन्हे",
+    },
+}
+
+
 def _localize_guardrail_categories(categories: List[str], language: str) -> str:
-    labels = {
-        "en": {
-            "cardiac": "cardiac",
-            "stroke": "stroke",
-            "breathing_distress": "breathing distress",
-            "severe_bleeding": "severe bleeding",
-        },
-        "hi": {
-            "cardiac": "हृदय संबंधी",
-            "stroke": "स्ट्रोक",
-            "breathing_distress": "सांस लेने में कठिनाई",
-            "severe_bleeding": "गंभीर रक्तस्राव",
-        },
-        "mr": {
-            "cardiac": "हृदय संबंधित",
-            "stroke": "स्ट्रोक",
-            "breathing_distress": "श्वासोच्छ्वास त्रास",
-            "severe_bleeding": "तीव्र रक्तस्राव",
-        },
-    }
-    mapping = labels.get(language, labels["en"])
+    mapping = _GUARDRAIL_CATEGORY_LABELS.get(language, _GUARDRAIL_CATEGORY_LABELS["en"])
     localized = [mapping.get(category, category.replace("_", " ")) for category in categories]
     return ", ".join(localized) if localized else ""
 
 
+_TOXIN_CATEGORY_LABELS = {
+    "en": {
+        "ingestion": "ingestion",
+        "exposure": "exposure",
+        "inhalation": "inhalation",
+        "skin_contact": "skin contact",
+        "eye_contact": "eye contact",
+    },
+    "hi": {
+        "ingestion": "निगलना",
+        "exposure": "संपर्क",
+        "inhalation": "सांस लेना",
+        "skin_contact": "त्वचा संपर्क",
+        "eye_contact": "आंखों का संपर्क",
+    },
+    "mr": {
+        "ingestion": "गिळणे",
+        "exposure": "संपर्क",
+        "inhalation": "श्वास घेणे",
+        "skin_contact": "त्वचा संपर्क",
+        "eye_contact": "डोळ्यांचा संपर्क",
+    },
+}
+
+
 def _localize_toxin_categories(categories: List[str], language: str) -> str:
-    labels = {
-        "en": {"ingestion": "ingestion", "exposure": "exposure", "inhalation": "inhalation"},
-        "hi": {"ingestion": "सेवन", "exposure": "संपर्क", "inhalation": "श्वास द्वारा"},
-        "mr": {"ingestion": "सेवन", "exposure": "संपर्क", "inhalation": "श्वासातून"},
-    }
-    mapping = labels.get(language, labels["en"])
-    localized = [mapping.get(category, category) for category in categories]
+    mapping = _TOXIN_CATEGORY_LABELS.get(language, _TOXIN_CATEGORY_LABELS["en"])
+    localized = [mapping.get(cat, cat.replace("_", " ")) for cat in categories]
     return ", ".join(localized) if localized else ""
 
 
 def _localize_guardrail_reasons(red_flag: Dict[str, Any], language: str) -> List[str]:
-    if language == "en":
-        return red_flag.get("reasons", []) or ["High-risk emergency red-flag detected."]
-
-    categories_text = _localize_guardrail_categories(red_flag.get("matched_categories", []), language)
-    reasons: List[str] = []
-    if categories_text:
+    reasons = []
+    cat_text = _localize_guardrail_categories(red_flag.get("matched_categories", []), language)
+    if cat_text:
         if language == "hi":
-            reasons.append(f"उच्च जोखिम संकेत मिले: {categories_text}.")
+            reasons.append(f"गंभीर लक्षण पाए गए: {cat_text}।")
+        elif language == "mr":
+            reasons.append(f"गंभीर लक्षणे आढळली: {cat_text}।")
         else:
-            reasons.append(f"उच्च धोका संकेत आढळले: {categories_text}.")
+            reasons.append(f"Critical indicators detected: {cat_text}.")
 
     if red_flag.get("ambiguous"):
         if language == "hi":
-            reasons.append("लक्षण स्पष्ट नहीं हैं, लेकिन संभावित आपातकाल का जोखिम है; सुरक्षा के लिए सावधानी बरती गई है।")
+            reasons.append("लक्षण स्पष्ट नहीं हैं; सुरक्षा के लिए रूढ़िवादी आपातकालीन मार्गदर्शन लागू किया गया।")
+        elif language == "mr":
+            reasons.append("लक्षण स्पष्ट नाहीत; सुरक्षिततेसाठी आपत्कालीन मार्गदर्शन दिले आहे।")
         else:
-            reasons.append("लक्षण स्पष्ट नाहीत, पण संभाव्य आपत्कालाचा धोका आहे; सुरक्षिततेसाठी सावध मार्गदर्शन दिले.")
-
-    if not reasons:
-        if language == "hi":
-            reasons.append("उच्च जोखिम आपातकाल संकेत मिला।")
-        else:
-            reasons.append("उच्च धोका आपत्काल संकेत आढळला.")
+            reasons.append("Symptoms are uncertain; using conservative emergency-first guidance for safety.")
     return reasons
 
 
 def _localize_toxin_reasons(toxin_flag: Dict[str, Any], language: str) -> List[str]:
-    if language == "en":
-        return toxin_flag.get("reasons", []) or ["Potential toxin or poison exposure detected."]
-
-    categories_text = _localize_toxin_categories(toxin_flag.get("matched_categories", []), language)
-    reasons: List[str] = []
-    if categories_text:
+    reasons = []
+    cat_text = _localize_toxin_categories(toxin_flag.get("matched_categories", []), language)
+    if cat_text:
         if language == "hi":
-            reasons.append(f"विषाक्त संपर्क के संकेत मिले: {categories_text}.")
+            reasons.append(f"विषाक्त संपर्क के संकेत पाए गए: {cat_text}।")
+        elif language == "mr":
+            reasons.append(f"विषारी संपर्काचे संकेत आढळले: {cat_text}।")
         else:
-            reasons.append(f"विषारी संपर्काचे संकेत आढळले: {categories_text}.")
+            reasons.append(f"Toxin exposure indicators detected: {cat_text}.")
 
     if toxin_flag.get("ambiguous"):
         if language == "hi":
-            reasons.append("संपर्क स्पष्ट नहीं है, लेकिन संभावित विषाक्त जोखिम है; सुरक्षा के लिए आपातकालीन मार्गदर्शन दिया गया है।")
+            reasons.append("संपर्क स्पष्ट नहीं है, फिर भी इसे आपातकाल माना गया।")
+        elif language == "mr":
+            reasons.append("संपर्क स्पष्ट नाही, तरीही हे आपत्काल समजले गेले।")
         else:
-            reasons.append("संपर्क स्पष्ट नाही, पण संभाव्य विषारी धोका आहे; सुरक्षिततेसाठी आपत्कालीन मार्गदर्शन.")
-
-    if not reasons:
-        if language == "hi":
-            reasons.append("संभावित विषाक्त संपर्क पाया गया।")
-        else:
-            reasons.append("संभाव्य विषारी संपर्क आढळला.")
+            reasons.append("Exposure is uncertain but potentially toxic; treated as emergency.")
     return reasons
 
 
-def _get_red_flag_keyword_groups() -> Dict[str, List[str]]:
-    """Hard red-flag groups for early emergency guardrails."""
-    return {
-        "cardiac": [
-            "heart attack", "severe chest pain", "crushing chest pain", "chest pain",
-            "chest tightness", "chest pressure", "radiating to arm", "arm pain with chest",
-            "jaw pain with chest", "sweating with chest pain", "left arm pain",
-        ] + HEART_SCORE_CONFIG.get("highly_suspicious_history", []) + HEART_SCORE_CONFIG.get("moderately_suspicious_history", []),
-        "stroke": ["stroke", "tia", "brain attack"]
-        + BEFAST_KEYWORDS.get("balance", [])
-        + BEFAST_KEYWORDS.get("eyes", [])
-        + BEFAST_KEYWORDS.get("face", [])
-        + BEFAST_KEYWORDS.get("arm", [])
-        + BEFAST_KEYWORDS.get("speech", []),
-        "breathing_distress": [
-            "can't breathe", "cannot breathe", "difficulty breathing", "shortness of breath",
-            "gasping", "choking", "suffocating", "blue lips", "turning blue",
-            "respiratory distress", "wheezing severe",
-        ],
-        "severe_bleeding": [
-            "severe bleeding", "won't stop bleeding", "massive blood loss", "bleeding heavily",
-            "hemorrhage", "blood loss", "vomiting blood", "coughing blood",
-        ] + TRAUMA_KEYWORDS.get("bleeding", []),
-    }
+# ── Red-flag guardrail ────────────────────────────────────────────────────────
+# Hard, rules-based detection of life-threatening presentations. Runs before the
+# model so an unavailable or wrong model can never downgrade these cases.
+# Latin-script phrases match on word boundaries; Devanagari phrases match as
+# substrings (Hindi/Marathi inflect by suffix, e.g. छाती → छातीत).
+_RED_FLAG_KEYWORDS: Dict[str, List[str]] = {
+    "cardiac": [
+        "heart attack", "chest pain", "chest tightness", "chest pressure", "chest heaviness",
+        "crushing chest", "pain radiating to arm", "radiating to left arm", "radiating to jaw",
+        "left arm pain", "arm pain with chest", "jaw pain with chest", "sweating with chest pain",
+        # Hindi
+        "दिल का दौरा", "हार्ट अटैक", "सीने में दर्द", "सीने में दबाव", "सीने में जकड़न",
+        "सीने में भारीपन", "छाती में दर्द", "दिल में दर्द", "बाएं हाथ में दर्द",
+        # Marathi
+        "हृदयविकाराचा झटका", "हार्ट अटॅक", "छातीत दुखणे", "छातीत दुखत", "छातीत दडपण",
+        "छातीवर दडपण", "छातीत घट्टपणा", "छातीत जडपणा", "छातीत वेदना", "हृदयात वेदना",
+        "डाव्या हातात वेदना",
+    ],
+    "stroke": [
+        "stroke", "tia", "brain attack", "face droop", "face drooping", "facial droop",
+        "facial drooping", "slurred speech", "speech is slurred", "sudden confusion",
+        "trouble speaking", "can't speak", "cannot speak", "weakness on one side",
+        "weakness one side", "one side weak", "one sided weakness", "one-sided weakness",
+        "numbness on one side", "sudden numbness", "can't lift my arm", "can't lift my left arm",
+        "can't lift my right arm", "paralysis", "paralyzed", "sudden vision loss",
+        "worst headache of my life",
+        # Hindi
+        "लकवा", "चेहरा टेढ़ा", "चेहरा लटक", "बोली अस्पष्ट", "लड़खड़ाती बोली",
+        "बोल नहीं पा रहा", "बोल नहीं पा रही", "एक तरफ कमजोरी", "हाथ ऊपर नहीं उठ",
+        # Marathi
+        "अर्धांगवायू", "चेहरा वाकडा", "चेहरा लटक", "अस्पष्ट बोलणे", "बोलता येत नाही",
+        "एक बाजू कमजोर", "हात वर उचलता येत नाही",
+    ],
+    "breathing_distress": [
+        "can't breathe", "cannot breathe", "can not breathe", "unable to breathe",
+        "difficulty breathing", "trouble breathing", "struggling to breathe", "hard to breathe",
+        "shortness of breath", "short of breath", "breathless", "breathlessness", "gasping",
+        "choking", "suffocating", "blue lips", "turning blue", "respiratory distress",
+        "not breathing", "stopped breathing",
+        # Hindi
+        "सांस नहीं ले पा", "सांस लेने में तकलीफ", "सांस लेने में दिक्कत", "सांस फूल",
+        "सांस की कमी", "दम घुट", "सांस रुक", "सांस बंद",
+        # Marathi
+        "श्वास घेता येत नाही", "श्वास घेण्यास त्रास", "श्वास घेण्यास अडचण", "श्वास कोंड",
+        "दम लागत", "श्वास बंद",
+    ],
+    "severe_bleeding": [
+        "severe bleeding", "heavy bleeding", "bleeding heavily", "bleeding profusely",
+        "won't stop bleeding", "wont stop bleeding", "bleeding won't stop", "bleeding wont stop",
+        "massive blood loss", "hemorrhage", "haemorrhage", "vomiting blood", "coughing blood",
+        "coughing up blood", "soaked in blood",
+        # Hindi
+        "खून नहीं रुक रहा", "खून बंद नहीं", "बहुत खून", "अत्यधिक रक्तस्राव", "खून की उल्टी",
+        "रक्तस्राव",
+        # Marathi
+        "खून थांबत नाही", "रक्त थांबत नाही", "खूप रक्त", "तीव्र रक्तस्राव", "रक्ताची उलटी",
+    ],
+    "trauma": [
+        "car accident", "road accident", "bike accident", "motorcycle accident",
+        "hit by a car", "hit by a vehicle", "major fall", "fall from height", "fell from height",
+        "head injury", "gunshot", "stab wound", "stabbed", "electrocuted", "electric shock",
+        # Hindi
+        "गंभीर चोट", "सड़क दुर्घटना", "कार एक्सीडेंट", "बाइक एक्सीडेंट", "गाड़ी दुर्घटना",
+        "सिर में चोट", "ऊंचाई से गिर", "ऊँचाई से गिर", "करंट लग",
+        # Marathi
+        "गंभीर दुखापत", "रस्ता अपघात", "कार अपघात", "गाडी अपघात", "मोटरसायकल अपघात",
+        "डोक्याला मार", "उंचीवरून पड", "शॉक लाग",
+    ],
+    "unconscious": [
+        "unconscious", "unresponsive", "not responding", "won't wake up", "wont wake up",
+        "collapsed",
+        # Hindi
+        "बेहोश", "होश नहीं",
+        # Marathi
+        "बेशुद्ध", "शुद्ध हरपली",
+    ],
+    "seizure": [
+        "seizure", "seizures", "convulsion", "convulsions", "convulsing",
+        # Hindi
+        "मिर्गी", "झटके आ",
+        # Marathi
+        "फेफरे", "झटके येत", "फिट आली",
+    ],
+    "anaphylaxis": [
+        "anaphylaxis", "anaphylactic", "throat closing", "throat is closing", "throat swelling",
+        "tongue swelling", "severe allergic reaction",
+        # Hindi
+        "गला बंद हो",
+        # Marathi
+        "घसा बंद होत",
+    ],
+    "self_harm": [
+        "suicide attempt", "attempted suicide", "suicidal", "kill myself", "end my life",
+        "want to die", "self harm", "self-harm", "cut myself",
+        # Hindi
+        "आत्महत्या", "खुद को मार", "जान दे दूं",
+        # Marathi
+        "स्वतःला मार", "जीव द्यायचा",
+    ],
+}
 
+# Phrases that alone justify maximum confidence.
+_EXPLICIT_CRITICAL_KEYWORDS = {
+    "heart attack", "crushing chest", "stroke", "face droop", "face drooping", "slurred speech",
+    "can't breathe", "cannot breathe", "not breathing", "stopped breathing", "severe bleeding",
+    "won't stop bleeding", "unconscious", "unresponsive", "anaphylaxis", "suicide attempt",
+    "दिल का दौरा", "हृदयविकाराचा झटका", "बेहोश", "बेशुद्ध", "लकवा", "अर्धांगवायू",
+}
 
-_NEGATION_PREFIXES = (
-    "no",
-    "not",
-    "without",
-    "denies",
-    "deny",
-    "denied",
-    "negative for",
-    "no sign of",
-    "no signs of",
+# Separator between words that does not cross a clause boundary.
+_SEP = r"[^\w.,;:!?\n।]+"
+_RED_FLAG_PATTERNS: Dict[str, List["re.Pattern[str]"]] = {
+    "cardiac": [
+        # "pain in my heart", "pressure on the chest"
+        re.compile(rf"\b(?:pain|ache|pressure|tightness|heaviness|discomfort)\b(?:{_SEP}\w+){{0,3}}?{_SEP}(?:heart|chest)\b"),
+        # "my chest hurts", "heart is aching"
+        re.compile(rf"\b(?:heart|chest)\b(?:{_SEP}\w+){{0,2}}?{_SEP}(?:pain|pains|ache|aches|aching|pressure|tightness|heaviness|discomfort|hurts?|hurting)\b"),
+        re.compile(r"(?:दिल|सीने|छाती|हृदय)\S*\s+(?:\S+\s+){0,2}?(?:दर्द|दबाव|जकड़न|भारीपन|वेदना|दुख|दडपण)"),
+        re.compile(r"(?:दर्द|वेदना)\s+(?:\S+\s+){0,2}?(?:दिल|सीने|छाती|हृदय)"),
+    ],
+    "breathing_distress": [
+        re.compile(rf"\b(?:can'?t|cannot|unable to|hard to|difficult to|struggling to|trouble)\b(?:{_SEP}\w+){{0,2}}?{_SEP}(?:breathe|breathing)\b"),
+        re.compile(r"सांस\S*\s+(?:\S+\s+){0,3}?(?:तकलीफ|दिक्कत|फूल|नहीं ले|रुक)"),
+        re.compile(r"श्वास\S*\s+(?:\S+\s+){0,3}?(?:त्रास|अडचण|येत नाही|कोंड|बंद)"),
+    ],
+}
+
+_UNCERTAINTY_MARKERS = (
+    "maybe", "might", "not sure", "unclear", "possibly", "i think", "could be", "unsure",
+    "शायद", "पता नहीं", "कदाचित", "माहित नाही",
+)
+
+# A negation word followed by at most two words directly before the finding,
+# within the same clause: "no chest pain", "denies any chest pain".
+_NEGATION_RE = re.compile(
+    r"\b(?:no|not|without|denies|denied|deny|negative for|no signs? of|free of)\s+(?:\w+\s+){0,2}$"
 )
 
 
-def _keyword_is_negated(text: str, keyword: str) -> bool:
-    if not keyword:
-        return False
-    for prefix in _NEGATION_PREFIXES:
-        if f"{prefix} {keyword}" in text:
-            return True
-    return False
+def _keyword_regex(keyword: str) -> "re.Pattern[str]":
+    escaped = re.escape(keyword)
+    if keyword.isascii():
+        return re.compile(rf"(?<![a-z]){escaped}(?![a-z])")
+    return re.compile(escaped)
+
+
+_RED_FLAG_KEYWORD_REGEXES: Dict[str, List[Tuple[str, "re.Pattern[str]"]]] = {
+    category: [(kw, _keyword_regex(kw)) for kw in keywords]
+    for category, keywords in _RED_FLAG_KEYWORDS.items()
+}
+
+
+def _normalize_symptom_text(text: Optional[str]) -> str:
+    return str(text or "").lower().replace("’", "'").replace("‘", "'")
+
+
+def _is_negated(text: str, start: int) -> bool:
+    window = text[max(0, start - 40):start]
+    clause = re.split(r"[.,;:!?\n।]", window)[-1]
+    return bool(_NEGATION_RE.search(clause))
+
+
+def _first_unnegated_match(pattern: "re.Pattern[str]", text: str) -> Optional[str]:
+    for match in pattern.finditer(text):
+        if not _is_negated(text, match.start()):
+            return match.group(0)
+    return None
 
 
 def _evaluate_red_flag_guardrail(patient_text: str) -> Dict[str, Any]:
-    """Evaluate high-risk red flags before non-emergency triage interpretation."""
-    text = str(patient_text or "").lower()
-    groups = _get_red_flag_keyword_groups()
+    """Evaluate high-risk red flags before any model-based triage."""
+    text = _normalize_symptom_text(patient_text)
 
     category_matches: Dict[str, List[str]] = {}
-    for category, keywords in groups.items():
-        seen = []
-        for kw in keywords:
-            if kw and kw in text and kw not in seen and not _keyword_is_negated(text, kw):
-                seen.append(kw)
-        if seen:
-            category_matches[category] = seen
+    for category, keyword_regexes in _RED_FLAG_KEYWORD_REGEXES.items():
+        found = [kw for kw, regex in keyword_regexes if _first_unnegated_match(regex, text)]
+        for pattern in _RED_FLAG_PATTERNS.get(category, []):
+            hit = _first_unnegated_match(pattern, text)
+            if hit and hit not in found:
+                found.append(hit)
+        if found:
+            category_matches[category] = found
 
     matched_categories = list(category_matches.keys())
     total_matches = sum(len(v) for v in category_matches.values())
-
-    uncertainty_markers = [
-        "maybe", "might", "not sure", "unclear", "possibly", "i think", "could be", "unsure"
-    ]
-    has_uncertainty = any(marker in text for marker in uncertainty_markers)
-
-    explicit_critical_markers = [
-        "heart attack", "severe chest pain", "crushing chest pain",
-        "stroke", "face droop", "slurred speech",
-        "can't breathe", "cannot breathe", "severe bleeding", "won't stop bleeding",
-    ]
+    has_uncertainty = any(marker in text for marker in _UNCERTAINTY_MARKERS)
     explicit_critical_hit = any(
-        marker in text and not _keyword_is_negated(text, marker)
-        for marker in explicit_critical_markers
+        kw in _EXPLICIT_CRITICAL_KEYWORDS for kws in category_matches.values() for kw in kws
     )
 
     confidence = 0.0
     if explicit_critical_hit:
         confidence = 0.95
     elif len(matched_categories) >= 2 or total_matches >= 3:
-        confidence = 0.85
+        confidence = 0.88
     elif total_matches >= 1:
-        confidence = 0.62
+        confidence = 0.8
 
-    ambiguous = bool(total_matches >= 1 and has_uncertainty)
-    guardrail_hit = bool(explicit_critical_hit or len(matched_categories) >= 1)
-    apply_guardrail = bool(guardrail_hit or ambiguous)
+    guardrail_hit = total_matches >= 1
+    ambiguous = guardrail_hit and has_uncertainty
+    if ambiguous:
+        confidence = max(confidence, 0.7)
 
     reasons = []
     for category in matched_categories:
         sample = ", ".join(category_matches[category][:3])
         reasons.append(f"Red-flag {category.replace('_', ' ')} indicators detected: {sample}.")
-    if ambiguous and not reasons:
+    if ambiguous:
         reasons.append("Symptoms are ambiguous but suggest possible emergency risk; conservative safety guidance applied.")
 
     return {
-        "apply_guardrail": apply_guardrail,
+        "apply_guardrail": guardrail_hit,
         "guardrail_hit": guardrail_hit,
         "ambiguous": ambiguous,
-        "confidence": max(confidence, 0.7 if ambiguous else confidence),
+        "confidence": confidence,
         "matched_categories": matched_categories,
         "matched_keywords": category_matches,
         "reasons": reasons,
-    }
-
-
-def _build_emergency_action_block(red_flag: Dict[str, Any], language: Optional[str] = None) -> Dict[str, Any]:
-    """Structured emergency action block required when red flags are detected."""
-    lang = _normalize_language(language)
-    immediate_actions_map = {
-        "en": [
-            "Call ambulance immediately if severe symptoms are present.",
-            "Go to the nearest emergency room without delay.",
-            "Do not drive yourself if dizzy, weak, or short of breath.",
-        ],
-        "hi": [
-            "अगर गंभीर लक्षण हों तो तुरंत एंबुलेंस बुलाएं।",
-            "सबसे नजदीकी इमरजेंसी रूम बिना देरी के जाएं।",
-            "यदि चक्कर, कमजोरी या सांस फूलना हो तो खुद वाहन न चलाएं।",
-        ],
-        "mr": [
-            "लक्षण गंभीर असतील तर त्वरित रुग्णवाहिका बोलवा.",
-            "ताबडतोब जवळच्या इमर्जन्सी कक्षात जा.",
-            "चक्कर, कमजोरी किंवा दम लागल्यास स्वतः वाहन चालवू नका.",
-        ],
-    }
-    immediate_actions = list(immediate_actions_map.get(lang, immediate_actions_map["en"]))
-    if red_flag.get("ambiguous"):
-        if lang == "hi":
-            immediate_actions.insert(0, "लक्षण स्पष्ट नहीं हैं; सुरक्षा के लिए आपातकालीन सलाह दी जा रही है।")
-        elif lang == "mr":
-            immediate_actions.insert(0, "लक्षण स्पष्ट नाहीत; सुरक्षिततेसाठी आपत्कालीन मार्गदर्शन दिले आहे.")
-        else:
-            immediate_actions.insert(0, "Symptoms are uncertain; using conservative emergency-first guidance for safety.")
-
-    return {
-        "type": "emergency_guardrail",
-        "triggered": bool(red_flag.get("apply_guardrail")),
-        "confidence": float(red_flag.get("confidence", 0.8)),
-        "matched_categories": red_flag.get("matched_categories", []),
-        "matched_keywords": red_flag.get("matched_keywords", {}),
-        "reasoning": _localize_guardrail_reasons(red_flag, lang),
-        "time_sensitivity": "immediate",
-        "call_ambulance": True,
-        "emergency_numbers": {
-            "ambulance": EMERGENCY_NUMBERS.get("ambulance", "108"),
-            "emergency": EMERGENCY_NUMBERS.get("emergency", "112"),
-        },
-        "immediate_actions": immediate_actions,
     }
 
 
@@ -921,123 +1064,12 @@ def _compose_guardrail_response_text(
     )
 
 
-def _localize_guardrail_reasons(red_flag: Dict[str, Any], language: str) -> List[str]:
-    reasons = []
-    cat_text = _localize_guardrail_categories(red_flag.get("matched_categories", []), language)
-    if cat_text:
-        if language == "hi":
-            reasons.append(f"गंभीर लक्षण पाए गए: {cat_text}।")
-        elif language == "mr":
-            reasons.append(f"गंभीर लक्षणे आढळली: {cat_text}।")
-        else:
-            reasons.append(f"Critical indicators detected: {cat_text}.")
-    
-    if red_flag.get("ambiguous"):
-        if language == "hi":
-            reasons.append("लक्षण स्पष्ट नहीं हैं; सुरक्षा के लिए रूढ़िवादी आपातकालीन मार्गदर्शन लागू किया गया।")
-        elif language == "mr":
-            reasons.append("लक्षण स्पष्ट नाहीत; सुरक्षिततेसाठी आपत्कालीन मार्गदर्शन दिले आहे।")
-        else:
-            reasons.append("Symptoms are uncertain; using conservative emergency-first guidance for safety.")
-    return reasons
-
-
-def _localize_toxin_reasons(toxin_flag: Dict[str, Any], language: str) -> List[str]:
-    reasons = []
-    cat_text = _localize_toxin_categories(toxin_flag.get("matched_categories", []), language)
-    if cat_text:
-        if language == "hi":
-            reasons.append(f"विषाक्त संपर्क के संकेत पाए गए: {cat_text}।")
-        elif language == "mr":
-            reasons.append(f"विषारी संपर्काचे संकेत आढळले: {cat_text}।")
-        else:
-            reasons.append(f"Toxin exposure indicators detected: {cat_text}.")
-    
-    if toxin_flag.get("ambiguous"):
-        if language == "hi":
-            reasons.append("संपर्क स्पष्ट नहीं है, फिर भी इसे आपातकाल माना गया।")
-        elif language == "mr":
-            reasons.append("संपर्क स्पष्ट नाही, तरीही हे आपत्काल समजले गेले।")
-        else:
-            reasons.append("Exposure is uncertain but potentially toxic; treated as emergency.")
-    return reasons
-
-
-def _localize_toxin_categories(categories: List[str], language: str) -> str:
-    labels = {
-        "en": {"ingestion": "ingestion", "inhalation": "inhalation", "skin_contact": "skin contact", "eye_contact": "eye contact"},
-        "hi": {"ingestion": "निगलना", "inhalation": "सांस लेना", "skin_contact": "त्वचा संपर्क", "eye_contact": "आंखों का संपर्क"},
-        "mr": {"ingestion": "गिळणे", "inhalation": "श्वास घेणे", "skin_contact": "त्वचा संपर्क", "eye_contact": "डोळ्यांचा संपर्क"},
-    }
-    mapping = labels.get(language, labels["en"])
-    localized = [mapping.get(cat, cat) for cat in categories]
-    return ", ".join(localized) if localized else ""
-
-
-def _evaluate_red_flag_guardrail(patient_text: str) -> Dict[str, Any]:
-    """Strict rules-based detection for life-threatening symptoms."""
-    text = str(patient_text or "").lower()
-    
-    # Proximity patterns for complex phrasing like "pain in my heart"
-    proximity_patterns = {
-        "cardiac": [
-            r"pain.*heart", r"heart.*pain", r"chest.*pain", r"pain.*chest",
-            r"heavy.*chest", r"pressure.*chest", r"tightness.*chest",
-            r"दिल.*दर्द", r"दर्द.*दिल", r"सीने.*दर्द", r"दर्द.*सीने",
-            r"हृदय.*वेदना", r"वेदना.*हृदय", r"छातीत.*दुखणे"
-        ],
-        "breathing": [
-            r"can't.*breathe", r"cannot.*breathe", r"difficulty.*breathing",
-            r"short.*breath", r"breathless", r"gasping",
-            r"सांस.*तकलीफ", r"सांस.*फूलना", r"श्वास.*त्रास", r"दम.*लागतो"
-        ]
-    }
-    
-    matched_categories = []
-    matched_keywords = {}
-    
-    # 1. Check proximity patterns first
-    for cat, patterns in proximity_patterns.items():
-        found = []
-        for pattern in patterns:
-            if re.search(pattern, text):
-                found.append(pattern)
-        if found:
-            matched_categories.append(cat)
-            matched_keywords[cat] = found
-            
-    # 2. Check static keywords from constants for extra coverage
-    guardrail_categories = {
-        "stroke": ["face drooping", "slurred speech", "numbness", "paralysis", "लकवा", "अर्धांगवायू"],
-        "severe_bleeding": ["heavy bleeding", "bleeding profusely", "खून निकलना", "रक्तस्राव", "अत्यधिक रक्तस्राव"],
-        "trauma": ["car accident", "major fall", "head injury", "गंभीर चोट"],
-    }
-    
-    for cat, kws in guardrail_categories.items():
-        matches = [kw for kw in kws if kw in text]
-        if matches:
-            if cat not in matched_categories:
-                matched_categories.append(cat)
-                matched_keywords[cat] = matches
-            else:
-                matched_keywords[cat].extend(matches)
-            
-    apply_guardrail = len(matched_categories) > 0
-    
-    return {
-        "apply_guardrail": apply_guardrail,
-        "guardrail_hit": apply_guardrail,
-        "matched_categories": matched_categories,
-        "matched_keywords": matched_keywords,
-        "confidence": 0.98 if apply_guardrail else 0.0,
-        "ambiguous": False
-    }
-
-
 def _build_emergency_action_block(red_flag: Dict[str, Any], language: Optional[str] = None) -> Dict[str, Any]:
     lang = _normalize_language(language)
     ambulance = EMERGENCY_NUMBERS.get("ambulance", "108")
-    
+    mental_health = EMERGENCY_NUMBERS.get("mental_health")
+    categories = red_flag.get("matched_categories", [])
+
     immediate_actions_map = {
         "en": [
             f"Call {ambulance} immediately.",
@@ -1055,24 +1087,60 @@ def _build_emergency_action_block(red_flag: Dict[str, Any], language: Optional[s
             "स्वतः वाहन चालवून हॉस्पिटलला जाऊ नका.",
         ],
     }
-    
     immediate_actions = list(immediate_actions_map.get(lang, immediate_actions_map["en"]))
-    
+
+    if red_flag.get("ambiguous"):
+        immediate_actions.insert(0, {
+            "hi": "लक्षण स्पष्ट नहीं हैं; सुरक्षा के लिए आपातकालीन सलाह दी जा रही है।",
+            "mr": "लक्षण स्पष्ट नाहीत; सुरक्षिततेसाठी आपत्कालीन मार्गदर्शन दिले आहे.",
+        }.get(lang, "Symptoms are uncertain; using conservative emergency-first guidance for safety."))
+
+    emergency_numbers = {
+        "ambulance": ambulance,
+        "emergency": EMERGENCY_NUMBERS.get("emergency", "112"),
+    }
+    if "self_harm" in categories and mental_health:
+        emergency_numbers["mental_health"] = mental_health
+        immediate_actions.append({
+            "hi": f"व्यक्ति को अकेला न छोड़ें। मानसिक स्वास्थ्य हेल्पलाइन: {mental_health}।",
+            "mr": f"व्यक्तीला एकटे सोडू नका. मानसिक आरोग्य हेल्पलाइन: {mental_health}.",
+        }.get(lang, f"Do not leave the person alone. Mental health helpline: {mental_health}."))
+
     return {
         "type": "emergency_guardrail",
         "triggered": bool(red_flag.get("apply_guardrail")),
         "confidence": float(red_flag.get("confidence", 0.9)),
-        "matched_categories": red_flag.get("matched_categories", []),
+        "matched_categories": categories,
         "matched_keywords": red_flag.get("matched_keywords", {}),
         "reasoning": _localize_guardrail_reasons(red_flag, lang),
         "time_sensitivity": "immediate",
         "call_ambulance": True,
-        "emergency_numbers": {
-            "ambulance": ambulance,
-            "emergency": EMERGENCY_NUMBERS.get("emergency", "112"),
-        },
+        "emergency_numbers": emergency_numbers,
         "immediate_actions": immediate_actions,
     }
+
+
+def _critical_vital_findings(
+    heart_rate: Optional[float] = None,
+    bp_systolic: Optional[float] = None,
+    bp_diastolic: Optional[float] = None,
+    spo2: Optional[float] = None,
+    temperature: Optional[float] = None,
+) -> List[str]:
+    """Vital signs in the critical range (emergency_triage.constants thresholds)."""
+    limits = VITAL_SIGNS_CRITICAL
+    findings = []
+    if heart_rate is not None and not limits["heart_rate_low"] <= heart_rate <= limits["heart_rate_high"]:
+        findings.append(f"Heart rate {heart_rate:g} BPM is in the critical range.")
+    if bp_systolic is not None and not limits["systolic_bp_low"] <= bp_systolic <= limits["systolic_bp_high"]:
+        findings.append(f"Systolic blood pressure {bp_systolic:g} mmHg is in the critical range.")
+    if bp_diastolic is not None and bp_diastolic > limits["diastolic_bp_high"]:
+        findings.append(f"Diastolic blood pressure {bp_diastolic:g} mmHg is in the critical range.")
+    if spo2 is not None and spo2 < limits["oxygen_saturation_low"]:
+        findings.append(f"Oxygen saturation {spo2:g}% is critically low.")
+    if temperature is not None and not limits["temperature_low"] <= temperature <= limits["temperature_high"]:
+        findings.append(f"Temperature {temperature:g}°C is in the critical range.")
+    return findings
 
 
 def _evaluate_toxin_fast_lane(patient_text: str) -> Dict[str, Any]:
@@ -1417,16 +1485,32 @@ async def get_consultation(request: ConsultationRequest, background_tasks: Backg
                 if triage_source == "local_gemma":
                     logger.info("Gemma 4 selected for offline-first triage.")
 
-                # SAFETY OVERRIDE: Force high urgency if critical keywords are present but triage missed them
-                current_urgency = str(triage_data.get("urgency", "low")).lower()
-                if current_urgency != "high":
-                    critical_check = _evaluate_red_flag_guardrail(request.patient_text)
-                    if critical_check.get("guardrail_hit"):
-                        logger.warning("Safety override: critical red-flags detected, upgrading to HIGH urgency.")
+                # SAFETY FLOOR: critical vital signs always mean HIGH urgency,
+                # whatever the model or the keyword classifier concluded.
+                vital_findings = _critical_vital_findings(
+                    heart_rate=request.heart_rate,
+                    bp_systolic=request.bp_systolic,
+                    bp_diastolic=request.bp_diastolic,
+                    spo2=request.spo2,
+                    temperature=request.temperature,
+                )
+                vitals_flag = None
+                if vital_findings:
+                    vitals_flag = {
+                        "apply_guardrail": True,
+                        "matched_categories": ["critical_vitals"],
+                        "confidence": 0.95,
+                    }
+                    emergency_action_block = _build_emergency_action_block(vitals_flag, request.language)
+                    emergency_action_block["type"] = "critical_vitals"
+                    if triage_data["urgency"] != "high":
+                        logger.warning("Safety floor: critical vital signs, upgrading to HIGH urgency.")
                         triage_data["urgency"] = "high"
-                        triage_data["reasons"].extend(critical_check.get("reasons", []))
-                        triage_data["actions"].insert(0, "Go to the nearest emergency department immediately.")
-                        triage_data["confidence"] = 1.0
+                        triage_data["reasons"] = vital_findings + triage_data["reasons"]
+                        triage_data["actions"] = (
+                            _build_guardrail_triage(vitals_flag, request.language)["actions"]
+                            + triage_data["actions"]
+                        )
 
                 # Keep old keys for backward compatibility
                 specialist_recommendation = triage_data.get("specialist", "general")
@@ -1436,6 +1520,8 @@ async def get_consultation(request: ConsultationRequest, background_tasks: Backg
                 doctor_text = ""
                 if triage_source == "local_gemma" and isinstance(local_triage_raw, dict):
                     doctor_text = str(local_triage_raw.get("doctor_response", "")).strip()
+                elif triage_source == "unassessed":
+                    doctor_text = _localized_message(_UNASSESSED_MESSAGES, request.language)
                 elif emergency_triage_raw:
                     doctor_text = str(emergency_triage_raw.get("doctor_response", "")).strip()
 
@@ -1443,6 +1529,10 @@ async def get_consultation(request: ConsultationRequest, background_tasks: Backg
                 if not doctor_text:
                     logger.info("Composing response from local triage data.")
                     doctor_text = _compose_doctor_response_from_triage(triage_data)
+
+                if vitals_flag:
+                    alert = _compose_guardrail_response_text(vitals_flag, triage_data, request.language)
+                    doctor_text = f"{alert}\n\n{doctor_text}"
 
         # Final safety fallback to ensure backwards-compatible doctor text
         if not doctor_text:
@@ -1528,40 +1618,14 @@ async def get_consultation(request: ConsultationRequest, background_tasks: Backg
         logger.info("Consultation completed successfully.")
         return response_data
 
-    except Exception as e:
-        logger.exception("Unhandled error in consultation endpoint: %s", e)
-        
-        # Return a fallback response
-        fallback_response = {
-            "doctor_response": f"I apologize, but I encountered a technical issue while processing your consultation. Please try again. If the problem persists, please check your internet connection and ensure all files are properly formatted. Technical details: {str(e)}",
-            "audio_url": None,
-            "specialist_recommendation": "general",
-            "urgency_level": "low",
-            "urgency": "low",
-            "reasons": ["Technical failure triggered safe fallback triage."],
-            "actions": ["Seek medical care if symptoms are severe or worsening."],
-            "specialist": "general",
-            "confidence": 0.3,
-            "triage": {
-                "urgency": "low",
-                "reasons": ["Technical failure triggered safe fallback triage."],
-                "actions": ["Seek medical care if symptoms are severe or worsening."],
-                "specialist": "general",
-                "confidence": 0.3,
-            },
-            "triage_source": "error_fallback",
-            "emergency_action_block": None,
-            "consensus_explanation": _build_consensus_explanation(
-                patient_text=request.patient_text,
-                typed_text=request.typed_text,
-                transcription_text=request.transcription_text,
-                image_data=request.image_data,
-                pdf_data=request.pdf_data,
-                final_urgency="low",
-            ),
-            "fairness_metrics": None,
-        }
-        return fallback_response
+    except Exception:
+        logger.exception("Unhandled error in consultation endpoint")
+        # A failed assessment must look like a failure, never like a "low"
+        # urgency result, and must not leak internals to the client.
+        raise HTTPException(
+            status_code=503,
+            detail=_localized_message(_ASSESSMENT_FAILED_MESSAGES, request.language),
+        )
 
 @app.get("/api/audio/{filename}")
 async def get_audio(filename: str):

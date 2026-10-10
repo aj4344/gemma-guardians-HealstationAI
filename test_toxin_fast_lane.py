@@ -108,7 +108,6 @@ def test_consultation_route_trigger_behavior_returns_toxin_fast_lane(monkeypatch
     monkeypatch.setattr(api, "_evaluate_red_flag_guardrail", _should_not_run)
     monkeypatch.setattr(api, "_run_local_gemma_triage", _should_not_run)
     monkeypatch.setattr(api, "_build_emergency_fallback_triage", _should_not_run)
-    monkeypatch.setattr(api, "get_doctor_response", _should_not_run)
 
     response = client.post(
         "/api/get-doctor-response",

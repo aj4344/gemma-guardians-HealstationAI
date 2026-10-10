@@ -77,7 +77,6 @@ def test_api_response_includes_consensus_block(monkeypatch):
     monkeypatch.setattr(api, "text_to_speech_for_api", _write_dummy_audio)
     monkeypatch.setattr(api, "_run_local_gemma_triage", lambda *args, **kwargs: local_payload)
     monkeypatch.setattr(api, "_build_emergency_fallback_triage", lambda *args, **kwargs: emergency_payload)
-    monkeypatch.setattr(api, "get_doctor_response", _should_not_run)
 
     response = client.post(
         "/api/get-doctor-response",
