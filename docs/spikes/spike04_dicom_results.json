@@ -1,0 +1,113 @@
+{
+  "platform": "Linux-6.18.44-fc-v114-x86_64-with-glibc2.39",
+  "pydicom": "3.0.2",
+  "files": {
+    "CT_small.dcm": {
+      "transfer_syntax": "Explicit VR Little Endian",
+      "modality": "CT",
+      "decoded": true,
+      "shape": [
+        128,
+        128
+      ],
+      "dtype": "int16",
+      "ms": 0.5
+    },
+    "MR_small_implicit.dcm": {
+      "transfer_syntax": "Implicit VR Little Endian",
+      "modality": "MR",
+      "decoded": true,
+      "shape": [
+        64,
+        64
+      ],
+      "dtype": "int16",
+      "ms": 1.1
+    },
+    "MR_small_bigendian.dcm": {
+      "transfer_syntax": "Explicit VR Big Endian",
+      "modality": "MR",
+      "decoded": true,
+      "shape": [
+        64,
+        64
+      ],
+      "dtype": ">i2",
+      "ms": 0.3
+    },
+    "MR_small_RLE.dcm": {
+      "transfer_syntax": "RLE Lossless",
+      "modality": "MR",
+      "decoded": true,
+      "shape": [
+        64,
+        64
+      ],
+      "dtype": "int16",
+      "ms": 0.7
+    },
+    "MR_small_jpeg_ls_lossless.dcm": {
+      "transfer_syntax": "JPEG-LS Lossless Image Compression",
+      "modality": "MR",
+      "decoded": true,
+      "shape": [
+        64,
+        64
+      ],
+      "dtype": "int16",
+      "ms": 1.8
+    },
+    "MR_small_jp2klossless.dcm": {
+      "transfer_syntax": "JPEG 2000 Image Compression (Lossless Only)",
+      "modality": "MR",
+      "decoded": true,
+      "shape": [
+        64,
+        64
+      ],
+      "dtype": "int16",
+      "ms": 1.4
+    },
+    "JPEG2000.dcm": {
+      "transfer_syntax": "JPEG 2000 Image Compression",
+      "modality": "NM",
+      "decoded": true,
+      "shape": [
+        1024,
+        256
+      ],
+      "dtype": "int16",
+      "ms": 3.9
+    },
+    "JPEG-lossy.dcm": {
+      "transfer_syntax": "JPEG Extended (Process 2 and 4)",
+      "modality": "NM",
+      "decoded": false,
+      "reason": "RuntimeError: Unable to decode as exceptions were raised by all available plugins:\n  pylibjpeg: libjpeg error code '-1038' returned fr",
+      "ms": 0.6
+    },
+    "SC_rgb_jpeg_dcmtk.dcm": {
+      "transfer_syntax": "JPEG Baseline (Process 1)",
+      "modality": "OT",
+      "decoded": true,
+      "shape": [
+        100,
+        100,
+        3
+      ],
+      "dtype": "uint8",
+      "ms": 1.1
+    },
+    "image_dfl.dcm": {
+      "transfer_syntax": "Deflated Explicit VR Little Endian",
+      "modality": "OT",
+      "decoded": true,
+      "shape": [
+        512,
+        512
+      ],
+      "dtype": "uint8",
+      "ms": 0.3
+    }
+  }
+}
