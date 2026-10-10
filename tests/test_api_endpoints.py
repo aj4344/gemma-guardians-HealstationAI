@@ -11,6 +11,10 @@ from fastapi.testclient import TestClient
 
 import api
 from emergency_triage.fairness_engine import FairnessTracker
+from healstation.api import app as app_module
+from healstation.api import v1
+from healstation.speech import response_audio
+from healstation.triage import model_client
 
 REPO_ROOT = Path(api.__file__).resolve().parent
 client = TestClient(api.app)
@@ -25,7 +29,7 @@ def test_transcribe_endpoint_calls_stt_not_itself(monkeypatch):
         calls.append((os.path.exists(path), language_code))
         return "chest pain since morning"
 
-    monkeypatch.setattr(api, "transcribe_audio", _fake_stt)
+    monkeypatch.setattr(v1, "transcribe_audio", _fake_stt)
     response = client.post(
         "/api/transcribe-audio",
         files={"audio": ("recording.webm", b"\x1a\x45\xdf\xa3fake-webm", "audio/webm")},
@@ -38,7 +42,7 @@ def test_transcribe_endpoint_calls_stt_not_itself(monkeypatch):
 
 
 def test_transcribe_failure_hides_internal_details(monkeypatch):
-    monkeypatch.setattr(api, "transcribe_audio", lambda *a, **k: "ERROR: decoder crashed | first_bytes=deadbeef")
+    monkeypatch.setattr(v1, "transcribe_audio", lambda *a, **k: "ERROR: decoder crashed | first_bytes=deadbeef")
     response = client.post(
         "/api/transcribe-audio",
         files={"audio": ("recording.webm", b"data", "audio/webm")},
@@ -49,11 +53,11 @@ def test_transcribe_failure_hides_internal_details(monkeypatch):
 
 
 def test_transcribe_rejects_oversized_and_empty_uploads(monkeypatch):
-    monkeypatch.setattr(api, "transcribe_audio", lambda *a, **k: "unreachable")
+    monkeypatch.setattr(v1, "transcribe_audio", lambda *a, **k: "unreachable")
     empty = client.post("/api/transcribe-audio", files={"audio": ("a.webm", b"", "audio/webm")})
     assert empty.status_code == 400
 
-    monkeypatch.setattr(api, "MAX_AUDIO_UPLOAD_MB", 0)
+    monkeypatch.setattr(v1, "MAX_AUDIO_UPLOAD_MB", 0)
     too_big = client.post("/api/transcribe-audio", files={"audio": ("a.webm", b"x" * 10, "audio/webm")})
     assert too_big.status_code == 413
 
@@ -61,20 +65,20 @@ def test_transcribe_rejects_oversized_and_empty_uploads(monkeypatch):
 def test_blocking_handlers_run_in_threadpool():
     # Sync handlers are run in a worker thread by FastAPI; async ones that
     # block (Ollama, TTS, Whisper) would freeze every other request.
-    for handler in (api.get_consultation, api.transcribe_audio_endpoint, api.get_audio, api.check_audio_status):
+    for handler in (v1.get_consultation, v1.transcribe_audio_endpoint, v1.get_audio, v1.check_audio_status):
         assert not inspect.iscoroutinefunction(handler), handler.__name__
 
 
 def test_generated_audio_is_unguessable_and_not_cached(monkeypatch, tmp_path):
-    monkeypatch.setattr(api, "AUDIO_OUTPUT_DIR", tmp_path)
-    monkeypatch.setattr(api, "LOCAL_TTS_ENABLED", True)
+    monkeypatch.setattr(response_audio, "AUDIO_OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(response_audio, "LOCAL_TTS_ENABLED", True)
 
     def _fake_tts(text, output_path, language):
         Path(output_path).write_bytes(b"RIFF....WAVE")
         return output_path
 
-    monkeypatch.setattr(api, "text_to_speech_for_api", _fake_tts)
-    monkeypatch.setattr(api, "_run_local_gemma_triage", lambda *a, **k: None)
+    monkeypatch.setattr(response_audio, "text_to_speech_for_api", _fake_tts)
+    monkeypatch.setattr(model_client, "run_local_gemma_triage", lambda *a, **k: None)
 
     response = client.post("/api/get-doctor-response", json={"patient_text": "Mild headache.", "language": "en"})
     assert response.status_code == 200
@@ -98,14 +102,14 @@ def test_audio_endpoints_reject_unknown_filenames():
 
 def test_consultation_input_limits():
     assert client.post("/api/get-doctor-response", json={"patient_text": ""}).status_code == 422
-    too_long = "a" * (api.MAX_TEXT_CHARS + 1)
+    too_long = "a" * (v1.MAX_TEXT_CHARS + 1)
     assert client.post("/api/get-doctor-response", json={"patient_text": too_long}).status_code == 422
-    many_images = {"patient_text": "rash", "image_data": ["x"] * (api.MAX_ATTACHMENTS + 1)}
+    many_images = {"patient_text": "rash", "image_data": ["x"] * (v1.MAX_ATTACHMENTS + 1)}
     assert client.post("/api/get-doctor-response", json=many_images).status_code == 422
 
 
 def test_request_size_limit(monkeypatch):
-    monkeypatch.setattr(api, "MAX_REQUEST_MB", 0)
+    monkeypatch.setattr(app_module, "MAX_REQUEST_MB", 0)
     response = client.post("/api/get-doctor-response", json={"patient_text": "headache"})
     assert response.status_code == 413
 

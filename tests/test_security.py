@@ -2,9 +2,13 @@
 
 import logging
 
+import requests
 from fastapi.testclient import TestClient
 
 import api
+import config
+from healstation.api import v1
+from healstation.speech import response_audio
 
 client = TestClient(api.app)
 SECRET_SYMPTOM = "zebra-striped rash on my left elbow"
@@ -17,7 +21,7 @@ def test_cors_only_allows_configured_origins():
     )
     assert "access-control-allow-origin" not in evil.headers
 
-    ui_origin = api.CORS_ALLOW_ORIGINS[0]
+    ui_origin = config.CORS_ALLOW_ORIGINS[0]
     ok = client.options(
         "/api/get-doctor-response",
         headers={
@@ -39,8 +43,8 @@ def test_patient_text_and_model_output_are_not_logged(monkeypatch, caplog):
             # Models often echo the symptoms back in their reasoning.
             return {"message": {"content": f'{{"urgency": "low", "reasons": ["{SECRET_SYMPTOM}"]}}'}}
 
-    monkeypatch.setattr(api.requests, "post", lambda *a, **k: _FakeResponse())
-    monkeypatch.setattr(api, "LOCAL_TTS_ENABLED", False)
+    monkeypatch.setattr(requests, "post", lambda *a, **k: _FakeResponse())
+    monkeypatch.setattr(response_audio, "LOCAL_TTS_ENABLED", False)
 
     with caplog.at_level(logging.DEBUG):
         response = client.post("/api/get-doctor-response", json={"patient_text": SECRET_SYMPTOM, "language": "en"})
@@ -82,7 +86,7 @@ def test_search_errors_do_not_leak_exception_text(monkeypatch):
     async def _boom(**kwargs):
         raise RuntimeError("database password=hunter2")
 
-    monkeypatch.setattr(api, "advanced_search_doctors", _boom)
+    monkeypatch.setattr(v1, "advanced_search_doctors", _boom)
     response = client.post(
         "/api/search-doctors",
         json={"latitude": 18.5, "longitude": 73.8, "specialty": "cardiologist"},

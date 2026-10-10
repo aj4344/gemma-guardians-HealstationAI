@@ -65,9 +65,9 @@ except Exception as e:
 # --- 3. Safety Guardrail -------------------------------------
 print("\n[3/3] Safety guardrail (no internet needed)...")
 try:
-    from api import _evaluate_red_flag_guardrail
+    from healstation.triage.guardrails import evaluate_red_flag_guardrail
 
-    result = _evaluate_red_flag_guardrail("I have pain in my heart and breathlessness")
+    result = evaluate_red_flag_guardrail("I have pain in my heart and breathlessness")
     if result["apply_guardrail"]:
         print("      [OK] CRITICAL override triggered correctly")
         print(f"           Categories: {result['matched_categories']}")

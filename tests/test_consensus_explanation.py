@@ -3,10 +3,12 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 import api
+from healstation.speech import response_audio
+from healstation.triage import consensus, fallback, model_client
 
 
 def test_consensus_aligned_signals_no_conflict():
-    result = api._build_consensus_explanation(
+    result = consensus.build_consensus_explanation(
         patient_text="mild headache",
         typed_text="mild headache",
         transcription_text="mild headache",
@@ -20,7 +22,7 @@ def test_consensus_aligned_signals_no_conflict():
 
 
 def test_consensus_conflicting_signals():
-    result = api._build_consensus_explanation(
+    result = consensus.build_consensus_explanation(
         patient_text="mild headache",
         typed_text="mild headache",
         transcription_text="severe chest pain and shortness of breath",
@@ -34,7 +36,7 @@ def test_consensus_conflicting_signals():
 
 
 def test_consensus_missing_modality_fallback():
-    result = api._build_consensus_explanation(
+    result = consensus.build_consensus_explanation(
         patient_text="mild headache",
         typed_text=None,
         transcription_text=None,
@@ -74,9 +76,9 @@ def test_api_response_includes_consensus_block(monkeypatch):
     def _should_not_run(*args, **kwargs):
         raise AssertionError("Cloud fallback should not run for valid local triage")
 
-    monkeypatch.setattr(api, "text_to_speech_for_api", _write_dummy_audio)
-    monkeypatch.setattr(api, "_run_local_gemma_triage", lambda *args, **kwargs: local_payload)
-    monkeypatch.setattr(api, "_build_emergency_fallback_triage", lambda *args, **kwargs: emergency_payload)
+    monkeypatch.setattr(response_audio, "text_to_speech_for_api", _write_dummy_audio)
+    monkeypatch.setattr(model_client, "run_local_gemma_triage", lambda *args, **kwargs: local_payload)
+    monkeypatch.setattr(fallback, "build_emergency_fallback_triage", lambda *args, **kwargs: emergency_payload)
 
     response = client.post(
         "/api/get-doctor-response",

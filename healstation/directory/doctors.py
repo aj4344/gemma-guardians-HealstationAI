@@ -1129,7 +1129,7 @@ async def search_doctors_by_city(
     )
 
 
-# Manual smoke test: python advanced_doctor_service.py
+# Manual smoke test: python -m healstation.directory.doctors
 async def _demo():
     for doctor in await search_doctors_by_city(city="Pune", specialty="cardiologist", limit=5):
         print(f"{doctor['name']} — {doctor['hospital']} ({doctor['distance']}) {doctor['phone']}")  # noqa: T201

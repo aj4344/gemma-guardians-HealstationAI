@@ -9,7 +9,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from voice_of_the_patient import transcribe_audio
+from healstation.speech.stt import transcribe_audio  # noqa: E402
 
 LANGUAGE_LABELS = {
     "en": "English",

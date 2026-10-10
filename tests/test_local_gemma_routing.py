@@ -4,6 +4,8 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 import api
+from healstation.speech import response_audio
+from healstation.triage import fallback, model_client
 
 
 def test_local_gemma_routing_prefers_local(monkeypatch):
@@ -33,9 +35,9 @@ def test_local_gemma_routing_prefers_local(monkeypatch):
     def _should_not_run(*args, **kwargs):
         raise AssertionError("Cloud fallback should not run for valid local triage")
 
-    monkeypatch.setattr(api, "text_to_speech_for_api", _write_dummy_audio)
-    monkeypatch.setattr(api, "_run_local_gemma_triage", lambda *args, **kwargs: local_payload)
-    monkeypatch.setattr(api, "_build_emergency_fallback_triage", lambda *args, **kwargs: emergency_payload)
+    monkeypatch.setattr(response_audio, "text_to_speech_for_api", _write_dummy_audio)
+    monkeypatch.setattr(model_client, "run_local_gemma_triage", lambda *args, **kwargs: local_payload)
+    monkeypatch.setattr(fallback, "build_emergency_fallback_triage", lambda *args, **kwargs: emergency_payload)
 
     response = client.post(
         "/api/get-doctor-response",
@@ -64,7 +66,7 @@ def test_local_gemma_payload_normalization():
         '"specialist":"general","confidence":"not_a_number","doctor_response":"ok"}'
     )
 
-    payload = api._extract_json_payload(raw_payload)
+    payload = model_client.extract_json_payload(raw_payload)
 
     assert payload["urgency"] == "high"
     assert payload["reasons"] == ["single reason"]
@@ -73,11 +75,11 @@ def test_local_gemma_payload_normalization():
 
 
 def test_local_gemma_urgency_mapping_for_urgent_and_stable():
-    urgent_payload = api._extract_json_payload(
+    urgent_payload = model_client.extract_json_payload(
         '{"urgency":"urgent","reasons":["r"],"actions":["a"],'
         '"specialist":"general","confidence":0.7,"doctor_response":"ok"}'
     )
-    stable_payload = api._extract_json_payload(
+    stable_payload = model_client.extract_json_payload(
         '{"urgency":"stable","reasons":["r"],"actions":["a"],'
         '"specialist":"general","confidence":0.7,"doctor_response":"ok"}'
     )
@@ -113,9 +115,9 @@ def test_local_gemma_language_fallback_adds_devanagari(monkeypatch):
     def _should_not_run(*args, **kwargs):
         raise AssertionError("Cloud fallback should not run for valid local triage")
 
-    monkeypatch.setattr(api, "text_to_speech_for_api", _write_dummy_audio)
-    monkeypatch.setattr(api, "_run_local_gemma_triage", lambda *args, **kwargs: local_payload)
-    monkeypatch.setattr(api, "_build_emergency_fallback_triage", lambda *args, **kwargs: emergency_payload)
+    monkeypatch.setattr(response_audio, "text_to_speech_for_api", _write_dummy_audio)
+    monkeypatch.setattr(model_client, "run_local_gemma_triage", lambda *args, **kwargs: local_payload)
+    monkeypatch.setattr(fallback, "build_emergency_fallback_triage", lambda *args, **kwargs: emergency_payload)
 
     response = client.post(
         "/api/get-doctor-response",

@@ -25,7 +25,6 @@ extend-immutable-calls = [
 "tests/**" = ["S", "T20", "B011"]
 "scripts/**" = ["T20", "S311", "S603", "S607"]
 "check_offline_ready.py" = ["T20", "E402"]
-"benchmark_offline.py" = ["T20", "E402"]
 "download_stt_model.py" = ["T20"]
 
 [tool.ruff.format]

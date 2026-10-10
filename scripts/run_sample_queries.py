@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ["ENABLE_LOCAL_TRIAGE"] = "true"
 os.environ["LOCAL_TTS_ENABLED"] = "false"
 
-import api
+from healstation.triage import model_client  # noqa: E402
 
 queries = [
     ("case_1", "I have a mild sore throat and runny nose since yesterday."),
@@ -28,7 +28,7 @@ results = []
 
 for case_id, query in queries:
     try:
-        result = api._run_local_gemma_triage(query, 'en')
+        result = model_client.run_local_gemma_triage(query, 'en')
 
         if result is None:
             results.append(

@@ -5,6 +5,9 @@ from fastapi.testclient import TestClient
 
 import api
 from emergency_triage.fairness_engine import FairnessTracker
+from healstation.api import v1
+from healstation.speech import response_audio
+from healstation.triage import fallback, model_client
 
 
 def _record_case(tracker, age, gender, language, is_correct, confidence):
@@ -42,9 +45,9 @@ def _stub_consultation_dependencies(monkeypatch):
     def _should_not_run(*args, **kwargs):
         raise AssertionError("Cloud fallback should not run for valid local triage")
 
-    monkeypatch.setattr(api, "text_to_speech_for_api", _write_dummy_audio)
-    monkeypatch.setattr(api, "_run_local_gemma_triage", lambda *args, **kwargs: local_payload)
-    monkeypatch.setattr(api, "_build_emergency_fallback_triage", lambda *args, **kwargs: emergency_payload)
+    monkeypatch.setattr(response_audio, "text_to_speech_for_api", _write_dummy_audio)
+    monkeypatch.setattr(model_client, "run_local_gemma_triage", lambda *args, **kwargs: local_payload)
+    monkeypatch.setattr(fallback, "build_emergency_fallback_triage", lambda *args, **kwargs: emergency_payload)
 
 
 def test_age_group_accuracy_buckets_match_required_ranges():
@@ -139,7 +142,7 @@ def test_tracker_reset_clears_all_counters():
 
 def test_api_response_includes_fairness_metrics(monkeypatch):
     client = TestClient(api.app)
-    api.fairness_tracker.reset()
+    v1.fairness_tracker.reset()
     _stub_consultation_dependencies(monkeypatch)
 
     response = client.post(
@@ -169,7 +172,7 @@ def test_api_response_includes_fairness_metrics(monkeypatch):
 
 def test_backward_compatibility_when_demographics_missing(monkeypatch):
     client = TestClient(api.app)
-    api.fairness_tracker.reset()
+    v1.fairness_tracker.reset()
     _stub_consultation_dependencies(monkeypatch)
 
     response = client.post(
