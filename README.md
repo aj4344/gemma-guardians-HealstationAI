@@ -1366,6 +1366,8 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## 🔮 Future Roadmap
 
+The production-readiness plan (requirements, phases, acceptance criteria) is in [docs/PRD.md](docs/PRD.md).
+
 - [ ] Analyse uploaded reports/images in the triage pipeline (currently accepted but not read)
 - [ ] Replace the static specialist directory with a verified source (e.g. ABDM Health Facility Registry)
 - [ ] Add more Indian languages (Tamil, Telugu, Bengali)
