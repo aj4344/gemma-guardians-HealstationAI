@@ -13,6 +13,7 @@ from datetime import datetime
 
 from fastapi import Request
 
+from healstation.ingest.service import AttachmentService, StorageGuard
 from healstation.settings import Settings
 from healstation.store.blobs import BlobStore
 from healstation.store.cases import CaseStore
@@ -50,6 +51,8 @@ class Runtime:
         self.keys = KeyService(kek)
         self.blobs = BlobStore(self.settings.data_dir)
         self.cases = CaseStore(self.db, self.keys, self.blobs, self.settings, clock=clock)
+        self.storage = StorageGuard(self.settings, self.blobs.usage_bytes)
+        self.attachments = AttachmentService(self.cases, self.settings, self.storage)
         self._started = False
 
     def start(self) -> None:

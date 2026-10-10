@@ -2,7 +2,8 @@
 
 from fastapi import APIRouter
 
-from healstation.api.v2 import cases
+from healstation.api.v2 import attachments, cases
 
 router = APIRouter()
 router.include_router(cases.router)
+router.include_router(attachments.router)

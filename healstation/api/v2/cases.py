@@ -17,14 +17,14 @@ from healstation.store.models import Case
 
 router = APIRouter(prefix="/api/v2/cases", tags=["cases"])
 
-_ID = re.compile(r"^[0-9a-f]{32}$")
+ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 Language = Literal["en", "hi", "mr"]
 Sex = Literal["female", "male", "other", "unknown"]
 
 
 def load_case(runtime: Runtime, case_id: str) -> Case:
     """The open case with this id, or NOT_FOUND (also for malformed and erased ids)."""
-    if not _ID.fullmatch(case_id):
+    if not ID_PATTERN.fullmatch(case_id):
         raise ApiError("NOT_FOUND")
     try:
         return runtime.cases.get(case_id)

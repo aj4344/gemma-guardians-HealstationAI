@@ -8,6 +8,44 @@ The running server publishes the authoritative OpenAPI schema at `/openapi.json`
 - **`/api` (v1)** — the original endpoints. They keep working, are marked deprecated, and will be removed
   in release 1.1 once the UI has moved to v2.
 
+## Version 2
+
+All v2 errors use one envelope and a reason code (PRD Appendix B); the message is already in the
+language from `Accept-Language` (`en`, `hi` or `mr`):
+
+```json
+{"error": {"code": "FILE_TOO_LARGE", "message_localized": "...", "retryable": false}, "request_id": "..."}
+```
+
+Every response carries `X-Request-ID`; every `/api` response is `Cache-Control: no-store`.
+
+### Cases
+
+| Method | Path | Result |
+|---|---|---|
+| POST | `/api/v2/cases` | `201 {case_id, pseudonym, language, created_at, expires_at}` |
+| GET | `/api/v2/cases/{case_id}` | the case, including decrypted `area` and `abha_number` |
+| DELETE | `/api/v2/cases/{case_id}` | `204` — ends the visit and erases everything (crypto-shred) |
+
+Create body (all optional): `{"language": "en|hi|mr", "age": 0-130, "sex": "female|male|other|unknown",
+"area": "≤120 chars", "abha_number": "14 digits"}`. Cases expire after `CASE_RETENTION_DAYS`.
+
+### Attachments
+
+`POST /api/v2/cases/{case_id}/attachments` — `multipart/form-data` with exactly one file part. Accepted:
+JPEG, PNG, WebP, HEIC photos; PDF; a DICOM file or a ZIP of a series. The type is detected from the bytes;
+the client's MIME type and extension must agree with it.
+
+- `202` `{attachment_id, kind, stage: "QUARANTINED", ...}` — processing continues in the background.
+- `200` with `"duplicate": true` — the same file was already attached to this case.
+- `413 FILE_TOO_LARGE`, `415 UNSUPPORTED_TYPE | TYPE_MISMATCH | POLYGLOT_FILE`, `409 TOO_MANY_ATTACHMENTS`,
+  `507 STORAGE_FULL`, `400 EMPTY_FILE | NO_FILE | MULTIPLE_FILES` — nothing is kept.
+
+`GET /api/v2/cases/{case_id}/attachments[/{attachment_id}]` returns `stage` (`RECEIVING`, `QUARANTINED`,
+`VALIDATING`, `SANITIZING`, `EXTRACTING`, `READY` or `REJECTED`), `progress`, `reason_code` with a localized
+message when rejected, and a de-identified `summary`. The original filename is never returned.
+`DELETE` removes the upload and everything derived from it.
+
 ## Version 1 (deprecated)
 
 ### 1. Core Health Endpoints
